@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "8 — status bar safe area"; // bump when index.html changes
+const APP_BUILD = "9 — menu suggest"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -534,9 +534,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState(null);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState("meal");
-  const [menuText, setMenuText] = useState("");
-  const [menuPicks, setMenuPicks] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [wCal, setWCal] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -551,8 +548,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     setSyncing(false);
   };
 
-  const remaining = targets.calories - eaten;
-  const proteinLeft = Math.max(targets.protein - macros.protein, 0);
   const kitchen = profile.kitchenNotes?.trim()
     ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
 
@@ -587,18 +582,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     setEstimate(null); setMealText("");
   };
 
-  const analyzeMenu = async () => {
-    if (!menuText.trim()) return;
-    setEstimating(true); setError(""); setMenuPicks(null);
-    try {
-      const text = await askClaude(`Workplace menu:\n${menuText}\n\nI have ~${remaining} kcal and ${proteinLeft}g protein left today; cutting while keeping muscle. Rank the 3 best options. Respond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`);
-      const j = parseJson(text);
-      if (j && j.picks) setMenuPicks(j.picks);
-      else setError("Couldn't rank that menu — paste it as plain text.");
-    } catch (e) { setError(`Menu ranking failed — ${e.message}`); }
-    setEstimating(false);
-  };
-
   const addManualWorkout = () => {
     const cals = Number(wCal);
     if (!cals) return;
@@ -607,16 +590,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   };
 
   const removeItem = (kind, id) => updateLog({ ...log, [kind]: log[kind].filter((x) => x.id !== id) });
-
-  const seg = (key, label) => (
-    <button onClick={() => { setMode(key); setError(""); setEstimate(null); setMenuPicks(null); }} style={{
-      flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
-      background: mode === key ? C.surface : "transparent",
-      color: mode === key ? C.ink : C.faint,
-      fontFamily: F.body, fontWeight: 600, fontSize: 13,
-      boxShadow: mode === key ? "0 1px 3px rgba(24,32,25,0.12)" : "none",
-    }}>{label}</button>
-  );
 
   return (
     <div>
@@ -655,13 +628,8 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
       </Card>
 
       <Card>
-        <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 12, padding: 4, marginBottom: 12 }}>
-          {seg("meal", "Log")}
-          {seg("menu", "Work menu")}
-        </div>
-
-        {mode === "meal" && (
-          <React.Fragment>
+        <Eyebrow>Log a meal</Eyebrow>
+        <React.Fragment>
             <textarea style={{ ...inputStyle, minHeight: 62, resize: "vertical" }} placeholder='"Office chicken burrito bowl, no rice, extra beans"' value={mealText} onChange={(e) => setMealText(e.target.value)} />
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
@@ -690,34 +658,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
               </div>
             )}
           </React.Fragment>
-        )}
-
-        {mode === "menu" && (
-          <React.Fragment>
-            <textarea style={{ ...inputStyle, minHeight: 92, resize: "vertical" }} placeholder="Paste this week's office menu…" value={menuText} onChange={(e) => setMenuText(e.target.value)} />
-            <div style={{ marginTop: 10 }}>
-              <Btn icon="spark" onClick={analyzeMenu} disabled={estimating || !menuText.trim() || !aiReady} full>
-                {estimating ? "Ranking…" : `Best picks for ${Math.max(remaining, 0)} kcal left`}
-              </Btn>
-            </div>
-            {menuPicks && menuPicks.map((p, i) => (
-              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.item}</div>
-                  {i === 0 && <Pill>Top pick</Pill>}
-                </div>
-                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{p.why}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{p.calories} kcal · P {p.protein_g}</span>
-                  <Btn small kind="ghost" onClick={() => {
-                    updateLog({ ...log, meals: [...log.meals, { name: p.item, calories: p.calories, protein_g: p.protein_g, carbs_g: p.carbs_g, fat_g: p.fat_g, id: Date.now() }] });
-                    setMenuPicks(null); setMenuText("");
-                  }}>Log this</Btn>
-                </div>
-              </div>
-            ))}
-          </React.Fragment>
-        )}
         {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
       </Card>
 
@@ -738,8 +678,11 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
 
 /* ============ Suggest ============ */
 function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }) {
+  const [mode, setMode] = useState("ideas");
   const [suggestText, setSuggestText] = useState("");
   const [suggestions, setSuggestions] = useState(null);
+  const [menuText, setMenuText] = useState("");
+  const [menuPicks, setMenuPicks] = useState(null);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState("");
 
@@ -759,30 +702,87 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
     setThinking(false);
   };
 
+  const analyzeMenu = async () => {
+    if (!menuText.trim()) return;
+    setThinking(true); setError(""); setMenuPicks(null);
+    try {
+      const text = await askClaude(`Menu:\n${menuText}\n\nI have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; cutting while keeping muscle. Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`);
+      const j = parseJson(text);
+      if (j && j.picks) setMenuPicks(j.picks);
+      else setError("Couldn't rank that menu — paste it as plain text.");
+    } catch (e) { setError(`Menu ranking failed — ${e.message}`); }
+    setThinking(false);
+  };
+
+  const seg = (key, label) => (
+    <button onClick={() => { setMode(key); setError(""); setSuggestions(null); setMenuPicks(null); }} style={{
+      flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
+      background: mode === key ? C.surface : "transparent",
+      color: mode === key ? C.ink : C.faint,
+      fontFamily: F.body, fontWeight: 600, fontSize: 13,
+      boxShadow: mode === key ? "0 1px 3px rgba(24,32,25,0.12)" : "none",
+    }}>{label}</button>
+  );
+
   return (
     <div>
       <Card>
-        <Eyebrow>What should I eat?</Eyebrow>
-        <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText}
-          onChange={(e) => setSuggestText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") getSuggestions(); }} />
-        <div style={{ marginTop: 10 }}>
-          <Btn icon="spark" onClick={getSuggestions} disabled={thinking || !aiReady} full>
-            {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
-          </Btn>
+        <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 12, padding: 4, marginBottom: 12 }}>
+          {seg("ideas", "Ideas")}
+          {seg("menu", "Menu suggest")}
         </div>
-        {suggestions && suggestions.map((s, i) => (
-          <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
-            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
-            <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
-                <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
-              </div>
+
+        {mode === "ideas" && (
+          <React.Fragment>
+            <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText}
+              onChange={(e) => setSuggestText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") getSuggestions(); }} />
+            <div style={{ marginTop: 10 }}>
+              <Btn icon="spark" onClick={getSuggestions} disabled={thinking || !aiReady} full>
+                {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
+              </Btn>
             </div>
-          </div>
-        ))}
+            {suggestions && suggestions.map((s, i) => (
+              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
+                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
+                    <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </React.Fragment>
+        )}
+
+        {mode === "menu" && (
+          <React.Fragment>
+            <textarea style={{ ...inputStyle, minHeight: 92, resize: "vertical" }} placeholder="Paste a menu — office cafeteria, restaurant, takeout…" value={menuText} onChange={(e) => setMenuText(e.target.value)} />
+            <div style={{ marginTop: 10 }}>
+              <Btn icon="spark" onClick={analyzeMenu} disabled={thinking || !menuText.trim() || !aiReady} full>
+                {thinking ? "Ranking…" : `Best picks for ${Math.max(remaining, 0)} kcal left`}
+              </Btn>
+            </div>
+            {menuPicks && menuPicks.map((p, i) => (
+              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.item}</div>
+                  {i === 0 && <Pill>Top pick</Pill>}
+                </div>
+                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{p.why}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{p.calories} kcal · P {p.protein_g}</span>
+                  <Btn small kind="ghost" onClick={() => {
+                    updateLog({ ...log, meals: [...log.meals, { name: p.item, calories: p.calories, protein_g: p.protein_g, carbs_g: p.carbs_g, fat_g: p.fat_g, id: Date.now() }] });
+                    setMenuPicks(null); setMenuText("");
+                  }}>Log this</Btn>
+                </div>
+              </div>
+            ))}
+          </React.Fragment>
+        )}
         {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
       </Card>
       <div style={{ fontSize: 13, color: C.faint, textAlign: "center", padding: "0 18px", lineHeight: 1.5 }}>
