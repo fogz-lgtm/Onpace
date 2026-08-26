@@ -35,10 +35,11 @@ banner while AI features are off.
 
 ## Connect Strava (optional)
 
-"Sync Strava" on the Today tab pulls today's workouts and their calories into
-your training log. Like the AI key, this works without a backend: you create
-your own free Strava API application and its credentials live only on your
-device.
+Once connected, today's workouts and their calories sync into your training
+log automatically — on app open, when you switch back to it, and every few
+minutes while it's open. ("Sync Strava" on the Today tab forces an instant
+re-check.) Like the AI key, this works without a backend: you create your own
+free Strava API application and its credentials live only on your device.
 
 1. Go to https://www.strava.com/settings/api and create an API application
    (any name/website; category "Training"). For **Authorization Callback
@@ -48,8 +49,8 @@ device.
    and Client Secret → **Connect Strava**.
 3. Approve on the Strava page it opens; you'll land back in OnPace showing
    "Connected".
-4. On the **Today** tab, tap **Sync Strava** after a workout. Already-synced
-   activities are skipped, so tapping repeatedly is safe.
+4. That's it — opening the app after a workout pulls it in. Already-synced
+   activities are skipped, so repeated syncs are safe.
 
 Calories come from Strava's per-activity figure (or the ride's kilojoules when
 that's all Strava has). Activities without calorie data are skipped — add

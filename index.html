@@ -25,7 +25,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -396,6 +396,61 @@ function App() {
   const updateApiKey = (n) => { setApiKey(n); saveKey("apikey", n); };
   const updateStrava = (n) => { setStrava(n); saveKey("strava", n); };
 
+  // Strava sync — reads today's log from storage so auto-sync can never write
+  // into a stale day, and dedupes by activity id so repeat runs are safe
+  const syncBusy = useRef(false);
+  const doStravaSync = async () => {
+    if (syncBusy.current) return { added: 0 };
+    syncBusy.current = true;
+    try {
+      const s = loadKey("strava", null);
+      if (!s || !s.refreshToken) return { added: 0 };
+      const token = await stravaAccess(s, updateStrava);
+      const start = new Date(); start.setHours(0, 0, 0, 0);
+      const res = await fetch(`${STRAVA_API}/athlete/activities?after=${Math.floor(start.getTime() / 1000)}&per_page=30`, { headers: { Authorization: `Bearer ${token}` } });
+      const acts = await res.json();
+      if (!res.ok) throw new Error(acts.message || "couldn't list activities");
+      const dk = todayKey();
+      const cur = loadKey(`log:${dk}`, { meals: [], workouts: [] });
+      const have = new Set(cur.workouts.map((w) => w.strava_id).filter(Boolean));
+      const added = [];
+      for (const a of acts) {
+        if (have.has(a.id)) continue;
+        const dRes = await fetch(`${STRAVA_API}/activities/${a.id}`, { headers: { Authorization: `Bearer ${token}` } });
+        const det = await dRes.json();
+        const cals = Math.round((dRes.ok && det.calories) || a.kilojoules || 0);
+        if (!cals) continue;
+        added.push({ id: a.id, strava_id: a.id, name: a.name, sport: a.sport_type, duration_min: Math.round(a.moving_time / 60), calories: cals, source: "Strava" });
+      }
+      if (added.length) {
+        const next = { ...cur, workouts: [...cur.workouts, ...added] };
+        saveKey(`log:${dk}`, next);
+        if (dk === date) setLog(next);
+      }
+      return { added: added.length };
+    } finally { syncBusy.current = false; }
+  };
+  const syncRef = useRef(null);
+  syncRef.current = doStravaSync;
+
+  // auto-sync: on launch/connect, on returning to the app, and every few minutes while open
+  const lastAutoSync = useRef(0);
+  const stravaOn = !!(strava && strava.refreshToken);
+  useEffect(() => {
+    if (!stravaOn) return;
+    const auto = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastAutoSync.current < 5 * 60 * 1000) return;
+      lastAutoSync.current = Date.now();
+      // small delay so the midnight-rollover check settles first
+      setTimeout(() => { if (syncRef.current) syncRef.current().catch(() => {}); }, 400);
+    };
+    auto();
+    document.addEventListener("visibilitychange", auto);
+    const iv = setInterval(auto, 60000);
+    return () => { document.removeEventListener("visibilitychange", auto); clearInterval(iv); };
+  }, [stravaOn]);
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92 }}>
       <header style={{ padding: "20px 18px 12px", maxWidth: 560, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -417,7 +472,7 @@ function App() {
       )}
 
       <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
-        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, strava, updateStrava }} />}
+        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava: doStravaSync }} />}
         {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady }} />}
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
         {tab === "settings" && (
@@ -454,7 +509,7 @@ function App() {
 }
 
 /* ============ Today ============ */
-function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, strava, updateStrava }) {
+function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava }) {
   const [mealText, setMealText] = useState("");
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState(null);
@@ -469,27 +524,11 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   const [syncing, setSyncing] = useState(false);
   const [trainMsg, setTrainMsg] = useState("");
 
-  const stravaOn = !!(strava && strava.refreshToken);
-  const syncStrava = async () => {
+  const syncNow = async () => {
     setSyncing(true); setTrainMsg("");
     try {
-      const token = await stravaAccess(strava, updateStrava);
-      const start = new Date(); start.setHours(0, 0, 0, 0);
-      const res = await fetch(`${STRAVA_API}/athlete/activities?after=${Math.floor(start.getTime() / 1000)}&per_page=30`, { headers: { Authorization: `Bearer ${token}` } });
-      const acts = await res.json();
-      if (!res.ok) throw new Error(acts.message || "couldn't list activities");
-      const have = new Set(log.workouts.map((w) => w.strava_id).filter(Boolean));
-      const added = [];
-      for (const a of acts) {
-        if (have.has(a.id)) continue;
-        const dRes = await fetch(`${STRAVA_API}/activities/${a.id}`, { headers: { Authorization: `Bearer ${token}` } });
-        const det = await dRes.json();
-        const cals = Math.round((dRes.ok && det.calories) || a.kilojoules || 0);
-        if (!cals) continue;
-        added.push({ id: a.id, strava_id: a.id, name: a.name, sport: a.sport_type, duration_min: Math.round(a.moving_time / 60), calories: cals, source: "Strava" });
-      }
-      if (added.length) updateLog({ ...log, workouts: [...log.workouts, ...added] });
-      setTrainMsg(added.length ? `Added ${added.length} workout${added.length === 1 ? "" : "s"} from Strava.` : "No new Strava workouts today.");
+      const r = await syncStrava();
+      setTrainMsg(r.added ? `Added ${r.added} workout${r.added === 1 ? "" : "s"} from Strava.` : "Up to date — no new Strava workouts today.");
     } catch (e) { setTrainMsg(`Strava sync failed — ${e.message}`); }
     setSyncing(false);
   };
@@ -579,13 +618,13 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
       <Card>
         <Eyebrow right={
           <div style={{ display: "flex", gap: 7 }}>
-            {stravaOn && <Btn small kind="ghost" icon="bolt" onClick={syncStrava} disabled={syncing}>{syncing ? "Syncing…" : "Sync Strava"}</Btn>}
+            {stravaOn && <Btn small kind="ghost" icon="bolt" onClick={syncNow} disabled={syncing}>{syncing ? "Syncing…" : "Sync Strava"}</Btn>}
             <Btn small kind="ghost" icon="plus" onClick={() => setManualOpen(!manualOpen)}>Add training</Btn>
           </div>
         }>Training</Eyebrow>
         {log.workouts.length === 0 && !manualOpen && (
           <div style={{ fontSize: 13.5, color: C.faint }}>
-            {stravaOn ? "Tap Sync Strava to pull today's workouts — your target rises to match." : "Add your workout calories (from your watch or Strava) — your target rises to match."}
+            {stravaOn ? "Strava workouts sync automatically when you open the app — your target rises to match." : "Add your workout calories (from your watch or Strava) — your target rises to match."}
           </div>
         )}
         {trainMsg && <div style={{ fontSize: 12.5, color: C.faint, marginTop: 6 }}>{trainMsg}</div>}
@@ -1068,7 +1107,8 @@ function StravaCard({ strava, updateStrava, msg }) {
       {connected ? (
         <React.Fragment>
           <div style={{ fontSize: 13.5, marginBottom: 10 }}>
-            Connected{strava.athlete ? ` as ${strava.athlete}` : ""}. Tap "Sync Strava" on the Today tab to pull today's workout calories.
+            Connected{strava.athlete ? ` as ${strava.athlete}` : ""}. Today's workouts sync automatically whenever you open the app;
+            "Sync Strava" on the Today tab re-checks instantly.
           </div>
           <Btn small kind="ghost" onClick={disconnect}>Disconnect</Btn>
         </React.Fragment>
