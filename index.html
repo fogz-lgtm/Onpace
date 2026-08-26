@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>OnPace</title>
+<meta name="theme-color" content="#0F241B" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="OnPace" />
+<link rel="apple-touch-icon" href="icon.png" />
+<link rel="icon" href="icon.png" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #F2F1EB; }
+  input:focus, textarea:focus, select:focus { border-color: #1E5A40 !important; box-shadow: 0 0 0 3px rgba(30,90,64,0.15); outline: none; }
+  button:focus-visible { outline: 2px solid #1E5A40; outline-offset: 2px; }
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+/* ============ CONFIG — paste your Cloudflare Worker URL here ============ */
+const PROXY_URL = "PASTE_YOUR_WORKER_URL_HERE"; // e.g. "https://onpace-proxy.yourname.workers.dev"
+const AI_READY = PROXY_URL.startsWith("https://");
+
+/* ============ tokens ============ */
+const C = {
+  bg: "#F2F1EB", surface: "#FFFFFF", forest: "#0F241B", forestUp: "#173428",
+  mint: "#9BDCB0", mintDim: "rgba(155,220,176,0.55)", ink: "#182019",
+  faint: "#68736B", line: "#E4E3DA", pine: "#1E5A40", pineSoft: "#E7F0E9",
+  amber: "#E0A33B", amberSoft: "#FBF1DC", amberDeep: "#A8730D", red: "#B04432",
+};
+const F = {
+  display: "'Archivo', system-ui, sans-serif",
+  body: "'Inter', system-ui, sans-serif",
+  mono: "'IBM Plex Mono', ui-monospace, monospace",
+};
+
+const todayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const DEFAULT_PROFILE = {
+  name: "", sex: "male", age: 38, heightFt: 5, heightIn: 9, weightLb: 170, rateLbWk: 1.0,
+  kitchenNotes: "Protein shakes at home always use Orgain Organic vanilla protein powder. One serving = 2 scoops = exactly 150 kcal, 21g protein, 15g carbs, 4g fat (per the label — do not estimate differently).",
+};
+
+/* ============ math ============ */
+function computeTargets(p, workoutCals) {
+  const kg = p.weightLb * 0.4536;
+  const cm = (p.heightFt * 12 + Number(p.heightIn)) * 2.54;
+  const bmr = 10 * kg + 6.25 * cm - 5 * p.age + (p.sex === "male" ? 5 : -161);
+  const baseTdee = bmr * 1.35;
+  const floor = p.sex === "male" ? 1500 : 1200;
+  const calories = Math.max(Math.round(baseTdee + workoutCals - p.rateLbWk * 500), floor);
+  const protein = Math.round(p.weightLb * 0.9);
+  const fat = Math.round(p.weightLb * 0.32);
+  const carbs = Math.max(Math.round((calories - protein * 4 - fat * 9) / 4), 0);
+  return { calories, protein, fat, carbs };
+}
+
+/* ============ AI via proxy ============ */
+async function askClaude(prompt, maxTokens = 1000, timeoutMs = 60000, imageBase64 = null) {
+  if (!AI_READY) throw new Error("AI not configured — paste your worker URL into index.html");
+  const content = imageBase64
+    ? [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }]
+    : prompt;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let data;
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content }],
+      }),
+      signal: ctrl.signal,
+    });
+    data = await res.json();
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s`);
+    throw e;
+  } finally { clearTimeout(timer); }
+  if (data.error) throw new Error(data.error.message || "AI request failed");
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").replace(/```json|```/g, "").trim();
+}
+
+function parseJson(text) {
+  try { return JSON.parse(text); } catch {
+    const m = text.match(/[\[{][\s\S]*[\]}]/);
+    if (m) { try { return JSON.parse(m[0]); } catch { return null; } }
+    return null;
+  }
+}
+
+function fileToJpegBase64(file, maxDim = 1100) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("decode failed"));
+      img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ============ storage: localStorage ============ */
+function loadKey(key, fallback) {
+  try {
+    const v = localStorage.getItem("onpace:" + key);
+    return v ? JSON.parse(v) : fallback;
+  } catch { return fallback; }
+}
+function saveKey(key, value) {
+  try {
+    localStorage.setItem("onpace:" + key, JSON.stringify(value));
+    return true;
+  } catch (e) { console.error(e); return false; }
+}
+
+/* ============ icons ============ */
+const Icon = ({ d, size = 20, sw = 1.8, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}>
+    {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+  </svg>
+);
+const ICONS = {
+  flame: "M12 3c1 3-2 4.5-2 7a3.5 3.5 0 0 0 7 .5C18.5 14 19 15.5 19 17a7 7 0 0 1-14 0c0-5 5-8 7-14z",
+  calendar: ["M4 6h16v14H4z", "M4 10h16", "M8 3v4", "M16 3v4"],
+  bookmark: "M7 3h10v18l-5-4-5 4z",
+  sliders: ["M5 4v6", "M5 14v6", "M12 4v2", "M12 10v10", "M19 4v10", "M19 18v2", "M3 10h4", "M10 6h4", "M17 14h4"],
+  bolt: "M13 2 4 14h6l-1 8 9-12h-6l1-8z",
+  plus: ["M12 5v14", "M5 12h14"],
+  x: ["M6 6l12 12", "M18 6 6 18"],
+  check: "M4 12l5 5L20 6",
+  copy: ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
+  spark: ["M12 3v4", "M12 17v4", "M3 12h4", "M17 12h4", "M6 6l2.5 2.5", "M15.5 15.5 18 18", "M18 6l-2.5 2.5", "M8.5 15.5 6 18"],
+  camera: ["M4 8h3.5l2-3h5l2 3H20v11H4z", "M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"],
+  swap: ["M21 5v5h-5", "M3 19v-5h5", "M4.5 9.5a8 8 0 0 1 13.6-3L21 10", "M19.5 14.5a8 8 0 0 1-13.6 3L3 14"],
+  chevron: "M6 9l6 6 6-6",
+};
+
+/* ============ atoms ============ */
+const Btn = ({ children, onClick, kind = "solid", disabled, small, full, icon }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+    width: full ? "100%" : "auto",
+    background: kind === "solid" ? C.pine : "transparent",
+    color: kind === "ghost" ? C.pine : "#FFF",
+    border: kind === "ghost" ? `1.5px solid ${C.pine}` : "1.5px solid transparent",
+    opacity: disabled ? 0.45 : 1, borderRadius: 12,
+    padding: small ? "7px 13px" : "12px 18px",
+    fontSize: small ? 13 : 14.5, fontFamily: F.body, fontWeight: 600,
+    cursor: disabled ? "default" : "pointer",
+    boxShadow: kind === "ghost" || disabled ? "none" : "0 1px 2px rgba(15,36,27,0.25)",
+  }}>
+    {icon && <Icon d={ICONS[icon]} size={small ? 14 : 16} />}
+    {children}
+  </button>
+);
+
+const Card = ({ children, style }) => (
+  <section style={{
+    background: C.surface, border: `1px solid ${C.line}`, borderRadius: 18, padding: 18, marginBottom: 14,
+    boxShadow: "0 1px 3px rgba(24,32,25,0.05), 0 8px 24px -18px rgba(24,32,25,0.25)", ...style,
+  }}>{children}</section>
+);
+
+const Eyebrow = ({ children, right }) => (
+  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+    <div style={{ fontFamily: F.display, fontSize: 12.5, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: C.ink }}>{children}</div>
+    {right}
+  </div>
+);
+
+const inputStyle = {
+  width: "100%", padding: "11px 13px", borderRadius: 12,
+  border: `1.5px solid ${C.line}`, background: "#FBFBF8",
+  color: C.ink, fontSize: 15, fontFamily: F.body,
+};
+
+const Field = ({ label, children }) => (
+  <label style={{ display: "block", marginBottom: 14 }}>
+    <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 6 }}>{label}</div>
+    {children}
+  </label>
+);
+
+const Pill = ({ children, tone = "pine" }) => {
+  const tones = {
+    pine: { background: C.pineSoft, color: C.pine },
+    amber: { background: C.amberSoft, color: C.amberDeep },
+  };
+  return <span style={{ fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 999, ...tones[tone] }}>{children}</span>;
+};
+
+function RingSvg({ size, stroke, value, target, color, track, children }) {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.min(value / Math.max(target, 1), 1);
+  return (
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={track} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)}
+          style={{ transition: "stroke-dashoffset 0.6s cubic-bezier(0.2,0.8,0.2,1)" }} />
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>{children}</div>
+    </div>
+  );
+}
+
+const Contours = () => (
+  <svg width="100%" height="100%" viewBox="0 0 400 220" preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", inset: 0, opacity: 0.5 }} aria-hidden="true">
+    {[0, 1, 2, 3, 4, 5].map((i) => (
+      <path key={i} d={`M-20 ${150 - i * 26} C 60 ${120 - i * 22}, 120 ${180 - i * 26}, 200 ${140 - i * 24} S 340 ${90 - i * 20}, 420 ${130 - i * 24}`}
+        fill="none" stroke="rgba(155,220,176,0.13)" strokeWidth="1.4" />
+    ))}
+  </svg>
+);
+
+function Hero({ name, targets, eaten, macros, trainingCals }) {
+  const left = targets.calories - eaten;
+  const over = left < 0;
+  return (
+    <div style={{
+      position: "relative", overflow: "hidden",
+      background: `linear-gradient(150deg, ${C.forestUp}, ${C.forest} 70%)`,
+      borderRadius: 22, padding: 20, marginBottom: 16,
+      boxShadow: "0 16px 40px -20px rgba(15,36,27,0.7)", color: "#FFF",
+    }}>
+      <Contours />
+      <div style={{ position: "relative" }}>
+        <div style={{ fontFamily: F.display, fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: C.mint, marginBottom: 14 }}>
+          {name ? `${name} · today` : "Today"}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+          <RingSvg size={122} stroke={11} value={eaten} target={targets.calories} color={over ? C.amber : C.mint} track="rgba(255,255,255,0.14)">
+            <div style={{ fontFamily: F.display, fontSize: 30, fontWeight: 800, lineHeight: 1, color: over ? C.amber : "#FFF" }}>{Math.abs(Math.round(left))}</div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: C.mintDim, marginTop: 3 }}>{over ? "kcal over" : "kcal left"}</div>
+          </RingSvg>
+          <div style={{ flex: 1, display: "flex", justifyContent: "space-around" }}>
+            {[[macros.protein, targets.protein, "Protein"], [macros.carbs, targets.carbs, "Carbs"], [macros.fat, targets.fat, "Fat"]].map(([v, t, label]) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <RingSvg size={54} stroke={5.5} value={v} target={t} color={C.mint} track="rgba(255,255,255,0.14)">
+                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600 }}>{Math.round(v)}</span>
+                </RingSvg>
+                <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: C.mintDim, marginTop: 5 }}>
+                  {label} <span style={{ color: "#FFF" }}>/{t}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
+          <span style={{ fontFamily: F.mono, fontSize: 12.5, color: C.mintDim }}>{Math.round(eaten)} / {targets.calories} kcal</span>
+          {trainingCals > 0 && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: C.mint, fontSize: 12.5, fontWeight: 600 }}>
+              <Icon d={ICONS.bolt} size={13} />+{Math.round(trainingCals)} from training
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============ app ============ */
+function App() {
+  const [tab, setTab] = useState("today");
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
+  const [log, setLog] = useState({ meals: [], workouts: [] });
+  const [library, setLibrary] = useState([]);
+  const [plan, setPlan] = useState(null);
+  const [firstRun, setFirstRun] = useState(false);
+  const [date, setDate] = useState(todayKey());
+
+  // live midnight rollover
+  useEffect(() => {
+    const check = () => {
+      const nd = todayKey();
+      if (nd !== date) {
+        setDate(nd);
+        setLog(loadKey(`log:${nd}`, { meals: [], workouts: [] }));
+      }
+    };
+    const iv = setInterval(check, 30000);
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [date]);
+
+  useEffect(() => {
+    const p = loadKey("profile", null);
+    if (p) setProfile({ ...DEFAULT_PROFILE, ...p }); else { setFirstRun(true); setTab("settings"); }
+    setLog(loadKey(`log:${date}`, { meals: [], workouts: [] }));
+    setLibrary(loadKey("library", []));
+    setPlan(loadKey("plan-current", null));
+  }, []);
+
+  const workoutCals = log.workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0);
+  const targets = useMemo(() => computeTargets(profile, workoutCals), [profile, workoutCals]);
+  const eaten = log.meals.reduce((s, m) => s + (Number(m.calories) || 0), 0);
+  const macros = {
+    protein: log.meals.reduce((s, m) => s + (Number(m.protein_g) || 0), 0),
+    carbs: log.meals.reduce((s, m) => s + (Number(m.carbs_g) || 0), 0),
+    fat: log.meals.reduce((s, m) => s + (Number(m.fat_g) || 0), 0),
+  };
+
+  const updateLog = (n) => { setLog(n); saveKey(`log:${date}`, n); };
+  const updateLibrary = (n) => { setLibrary(n); saveKey("library", n); };
+  const updateProfile = (n) => { setProfile(n); saveKey("profile", n); };
+  const updatePlan = (n) => { setPlan(n); saveKey("plan-current", n); };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92 }}>
+      <header style={{ padding: "20px 18px 12px", maxWidth: 560, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div style={{ fontFamily: F.display, fontWeight: 800, fontSize: 22 }}>On<span style={{ color: C.pine }}>Pace</span></div>
+        <div style={{ fontSize: 13, fontWeight: 500, color: C.faint }}>
+          {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+        </div>
+      </header>
+
+      {!AI_READY && (
+        <div style={{ maxWidth: 560, margin: "0 auto", padding: "0 16px" }}>
+          <Card style={{ background: C.amberSoft, border: "none" }}>
+            <div style={{ fontSize: 13, color: C.amberDeep, fontWeight: 600, lineHeight: 1.5 }}>
+              AI features are off — paste your Cloudflare Worker URL into PROXY_URL in index.html (see README).
+              Logging from your Library and manual entry still work.
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
+        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary }} />}
+        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan }} />}
+        {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
+        {tab === "settings" && (
+          <SettingsTab {...{ profile, updateProfile, firstRun }} done={() => { setFirstRun(false); setTab("today"); }}
+            appData={{ profile, log, library, plan }}
+            onRestore={(d) => {
+              if (d.profile) updateProfile({ ...DEFAULT_PROFILE, ...d.profile });
+              if (d.log) updateLog({ meals: d.log.meals || [], workouts: d.log.workouts || [] });
+              if (d.library) updateLibrary(d.library);
+              if (d.plan) updatePlan(d.plan);
+            }} />
+        )}
+      </main>
+
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.forest, borderTop: "1px solid rgba(155,220,176,0.15)", boxShadow: "0 -8px 30px rgba(15,36,27,0.25)", paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div style={{ display: "flex", maxWidth: 560, margin: "0 auto" }}>
+          {[["today", "Today", "flame"], ["plan", "Plan", "calendar"], ["library", "Library", "bookmark"], ["settings", "You", "sliders"]].map(([k, label, ic]) => {
+            const active = tab === k;
+            return (
+              <button key={k} onClick={() => setTab(k)} style={{
+                flex: 1, padding: "12px 0 14px", background: "transparent", border: "none", cursor: "pointer",
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                color: active ? C.mint : "rgba(255,255,255,0.55)",
+              }}>
+                <Icon d={ICONS[ic]} size={21} sw={active ? 2.1 : 1.7} />
+                <span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    </div>
+  );
+}
+
+/* ============ Today ============ */
+function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary }) {
+  const [mealText, setMealText] = useState("");
+  const [estimating, setEstimating] = useState(false);
+  const [estimate, setEstimate] = useState(null);
+  const [error, setError] = useState("");
+  const [mode, setMode] = useState("meal");
+  const [menuText, setMenuText] = useState("");
+  const [menuPicks, setMenuPicks] = useState(null);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestions, setSuggestions] = useState(null);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [wCal, setWCal] = useState("");
+
+  const remaining = targets.calories - eaten;
+  const proteinLeft = Math.max(targets.protein - macros.protein, 0);
+  const kitchen = profile.kitchenNotes?.trim()
+    ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
+
+  const estimateMeal = async () => {
+    if (!mealText.trim()) return;
+    setEstimating(true); setError(""); setEstimate(null);
+    try {
+      const text = await askClaude(`Estimate nutrition for this meal as eaten (typical restaurant/cafeteria portions unless stated): "${mealText}".${kitchen}\nRespond ONLY with JSON: {"name": short name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`);
+      const j = parseJson(text);
+      if (j && j.calories != null) setEstimate(j);
+      else setError("Couldn't estimate that — try rewording it.");
+    } catch (e) { setError(`Estimate failed — ${e.message}`); }
+    setEstimating(false);
+  };
+
+  const estimatePhoto = async (file) => {
+    if (!file) return;
+    setEstimating(true); setError(""); setEstimate(null);
+    try {
+      const b64 = await fileToJpegBase64(file);
+      const text = await askClaude(`This photo shows either a meal/food or a nutrition facts label. If it's a meal, estimate the nutrition for the visible portion as served. If it's a nutrition label, read it and report values for one typical serving (note the serving in the name).${kitchen}\nRespond ONLY with JSON: {"name": short descriptive name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`, 1000, 60000, b64);
+      const j = parseJson(text);
+      if (j && j.calories != null) setEstimate(j);
+      else setError("Couldn't read that photo — try a clearer shot.");
+    } catch (e) { setError(`Photo estimate failed — ${e.message}`); }
+    setEstimating(false);
+  };
+
+  const logEstimate = (alsoSave) => {
+    updateLog({ ...log, meals: [...log.meals, { ...estimate, id: Date.now() }] });
+    if (alsoSave) updateLibrary([...library, { ...estimate, id: Date.now() + 1 }]);
+    setEstimate(null); setMealText("");
+  };
+
+  const analyzeMenu = async () => {
+    if (!menuText.trim()) return;
+    setEstimating(true); setError(""); setMenuPicks(null);
+    try {
+      const text = await askClaude(`Workplace menu:\n${menuText}\n\nI have ~${remaining} kcal and ${proteinLeft}g protein left today; cutting while keeping muscle. Rank the 3 best options. Respond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`);
+      const j = parseJson(text);
+      if (j && j.picks) setMenuPicks(j.picks);
+      else setError("Couldn't rank that menu — paste it as plain text.");
+    } catch (e) { setError(`Menu ranking failed — ${e.message}`); }
+    setEstimating(false);
+  };
+
+  const getSuggestions = async () => {
+    setEstimating(true); setError(""); setSuggestions(null);
+    try {
+      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; I'm cutting while keeping muscle, so prioritize closing the protein gap. Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
+      const j = parseJson(text);
+      if (j && j.suggestions) setSuggestions(j.suggestions);
+      else setError("Couldn't get suggestions — try again.");
+    } catch (e) { setError(`Suggestion failed — ${e.message}`); }
+    setEstimating(false);
+  };
+
+  const addManualWorkout = () => {
+    const cals = Number(wCal);
+    if (!cals) return;
+    updateLog({ ...log, workouts: [...log.workouts, { id: Date.now(), name: "Workout", sport: "other", calories: cals, source: "manual" }] });
+    setWCal(""); setManualOpen(false);
+  };
+
+  const removeItem = (kind, id) => updateLog({ ...log, [kind]: log[kind].filter((x) => x.id !== id) });
+
+  const seg = (key, label) => (
+    <button onClick={() => { setMode(key); setError(""); setEstimate(null); setMenuPicks(null); setSuggestions(null); }} style={{
+      flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
+      background: mode === key ? C.surface : "transparent",
+      color: mode === key ? C.ink : C.faint,
+      fontFamily: F.body, fontWeight: 600, fontSize: 13,
+      boxShadow: mode === key ? "0 1px 3px rgba(24,32,25,0.12)" : "none",
+    }}>{label}</button>
+  );
+
+  return (
+    <div>
+      <Hero name={profile.name} targets={targets} eaten={eaten} macros={macros} trainingCals={log.workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0)} />
+
+      <Card>
+        <Eyebrow right={<Btn small kind="ghost" icon="plus" onClick={() => setManualOpen(!manualOpen)}>Add training</Btn>}>Training</Eyebrow>
+        {log.workouts.length === 0 && !manualOpen && (
+          <div style={{ fontSize: 13.5, color: C.faint }}>Add your workout calories (from your watch or Strava) — your target rises to match.</div>
+        )}
+        {log.workouts.map((w) => (
+          <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
+            <span style={{ color: C.pine, display: "inline-flex" }}><Icon d={ICONS.bolt} size={17} /></span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14.5 }}>{w.name}</div>
+              <div style={{ fontSize: 12, color: C.faint }}>{w.duration_min ? `${w.duration_min} min · ` : ""}{w.source}</div>
+            </div>
+            <span style={{ fontFamily: F.mono, fontSize: 14, fontWeight: 600, color: C.pine }}>+{Math.round(w.calories)}</span>
+            <button onClick={() => removeItem("workouts", w.id)} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 4 }}><Icon d={ICONS.x} size={14} /></button>
+          </div>
+        ))}
+        {manualOpen && (
+          <div style={{ marginTop: 10, paddingTop: 12, borderTop: `1px solid ${C.line}`, display: "flex", gap: 8 }}>
+            <input style={{ ...inputStyle, flex: 1 }} placeholder="Calories burned, e.g. 350" inputMode="numeric" value={wCal} onChange={(e) => setWCal(e.target.value)} />
+            <Btn small onClick={addManualWorkout} disabled={!Number(wCal)}>Add</Btn>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 12, padding: 4, marginBottom: 12 }}>
+          {seg("meal", "Log")}
+          {seg("menu", "Work menu")}
+          {seg("suggest", "Suggest")}
+        </div>
+
+        {mode === "suggest" && (
+          <React.Fragment>
+            <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText} onChange={(e) => setSuggestText(e.target.value)} />
+            <div style={{ marginTop: 10 }}>
+              <Btn icon="spark" onClick={getSuggestions} disabled={estimating || !AI_READY} full>
+                {estimating ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
+              </Btn>
+            </div>
+            {suggestions && suggestions.map((s, i) => (
+              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
+                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
+                    <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </React.Fragment>
+        )}
+
+        {mode === "meal" && (
+          <React.Fragment>
+            <textarea style={{ ...inputStyle, minHeight: 62, resize: "vertical" }} placeholder='"Office chicken burrito bowl, no rice, extra beans"' value={mealText} onChange={(e) => setMealText(e.target.value)} />
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <Btn icon="spark" onClick={estimateMeal} disabled={estimating || !mealText.trim() || !AI_READY} full>
+                  {estimating ? "Estimating…" : "Estimate macros"}
+                </Btn>
+              </div>
+              <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, color: C.pine, opacity: estimating || !AI_READY ? 0.45 : 1 }} title="Snap a meal or nutrition label">
+                <Icon d={ICONS.camera} size={20} />
+                <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={estimating || !AI_READY}
+                  onChange={(e) => { estimatePhoto(e.target.files && e.target.files[0]); e.target.value = ""; }} />
+              </label>
+            </div>
+            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Type it, or snap a photo of the plate or the nutrition label.</div>
+            {estimate && (
+              <div style={{ marginTop: 12, padding: 14, background: C.pineSoft, borderRadius: 14 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{estimate.name}</div>
+                <div style={{ fontFamily: F.mono, fontSize: 13.5, margin: "5px 0 11px", color: C.pine, fontWeight: 600 }}>
+                  {estimate.calories} kcal · P {estimate.protein_g} · C {estimate.carbs_g} · F {estimate.fat_g}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Btn small onClick={() => logEstimate(false)}>Log it</Btn>
+                  <Btn small kind="ghost" onClick={() => logEstimate(true)}>Log + save to Library</Btn>
+                  <Btn small kind="ghost" onClick={() => setEstimate(null)}>Discard</Btn>
+                </div>
+              </div>
+            )}
+          </React.Fragment>
+        )}
+
+        {mode === "menu" && (
+          <React.Fragment>
+            <textarea style={{ ...inputStyle, minHeight: 92, resize: "vertical" }} placeholder="Paste this week's office menu…" value={menuText} onChange={(e) => setMenuText(e.target.value)} />
+            <div style={{ marginTop: 10 }}>
+              <Btn icon="spark" onClick={analyzeMenu} disabled={estimating || !menuText.trim() || !AI_READY} full>
+                {estimating ? "Ranking…" : `Best picks for ${Math.max(remaining, 0)} kcal left`}
+              </Btn>
+            </div>
+            {menuPicks && menuPicks.map((p, i) => (
+              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5 }}>{p.item}</div>
+                  {i === 0 && <Pill>Top pick</Pill>}
+                </div>
+                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{p.why}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{p.calories} kcal · P {p.protein_g}</span>
+                  <Btn small kind="ghost" onClick={() => {
+                    updateLog({ ...log, meals: [...log.meals, { name: p.item, calories: p.calories, protein_g: p.protein_g, carbs_g: p.carbs_g, fat_g: p.fat_g, id: Date.now() }] });
+                    setMenuPicks(null); setMenuText("");
+                  }}>Log this</Btn>
+                </div>
+              </div>
+            ))}
+          </React.Fragment>
+        )}
+        {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
+      </Card>
+
+      <Card>
+        <Eyebrow>Eaten today</Eyebrow>
+        {log.meals.length === 0 && <div style={{ fontSize: 13.5, color: C.faint }}>Nothing yet — log above or tap your Library.</div>}
+        {log.meals.map((m) => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
+            <div style={{ flex: 1, fontWeight: 600, fontSize: 14.5 }}>{m.name}</div>
+            <span style={{ fontFamily: F.mono, fontSize: 13, color: C.faint, whiteSpace: "nowrap" }}>{m.calories} · P{m.protein_g}</span>
+            <button onClick={() => removeItem("meals", m.id)} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 4 }}><Icon d={ICONS.x} size={14} /></button>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+/* ============ Plan ============ */
+function PlanTab({ profile, targets, plan, updatePlan }) {
+  const [nights, setNights] = useState(4);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [swapping, setSwapping] = useState(null);
+  const [openRecipe, setOpenRecipe] = useState(null);
+  const [recipeBusy, setRecipeBusy] = useState(null);
+  const [error, setError] = useState("");
+
+  const constraints = (avoid) => `- Cook is cutting at ~${targets.calories} kcal/day, ${targets.protein}g protein; dinners high-protein, 550-700 kcal/serving.
+- Partner priorities: iron-rich, heart-healthy / cholesterol-friendly (low sat fat; fish, legumes, leafy greens, whole grains).
+- Style: one-pan/sheet-pan leaning; mix of batch-friendly (leftovers) and quick fresh.
+${profile.kitchenNotes?.trim() ? `- Standing kitchen facts — apply when relevant: ${profile.kitchenNotes.trim()}` : ""}
+${avoid && avoid.length ? `- NEVER suggest these rejected meals or close variants: ${avoid.join("; ")}.` : ""}`;
+
+  const toggleRecipe = async (idx) => {
+    if (openRecipe === idx) { setOpenRecipe(null); return; }
+    setOpenRecipe(idx);
+    const d = plan.dinners[idx];
+    if (d.recipe) return;
+    setRecipeBusy(idx);
+    try {
+      const text = await askClaude(`Write a concise recipe for "${d.name}" — ${d.desc}. ${d.style === "batch" ? "4 servings (dinner for two plus leftovers)" : "2 servings"}. Use these ingredients: ${JSON.stringify(d.ingredients)}. Keep it high-protein, low saturated fat. Respond ONLY with compact JSON: {"time_min": total number, "servings": number, "steps": [max 8 short imperative steps]}. No other text.`, 1500);
+      const j = parseJson(text);
+      if (j && j.steps) updatePlan({ ...plan, dinners: plan.dinners.map((x, i) => (i === idx ? { ...x, recipe: j } : x)) });
+      else setError("Couldn't load that recipe — tap again to retry.");
+    } catch (e) { setError(`Recipe load failed — ${e.message}`); }
+    setRecipeBusy(null);
+  };
+
+  const swapDinner = async (idx) => {
+    setSwapping(idx); setError("");
+    const rejectedMeal = plan.dinners[idx];
+    const keeping = plan.dinners.filter((_, i) => i !== idx);
+    const rejected = [...(plan.rejected || []), rejectedMeal.name].slice(-20);
+    try {
+      const text = await askClaude(`I'm replacing one dinner in a weekly plan for two adults. Constraints:
+${constraints(rejected)}
+Keeping these dinners (with their ingredients): ${JSON.stringify(keeping.map((d) => ({ name: d.name, style: d.style, ingredients: d.ingredients })))}
+Suggest ONE new dinner, different from everything above, style "${rejectedMeal.style}". Then rebuild the consolidated shopping list covering the new dinner plus ALL kept dinners.
+Respond ONLY with compact single-line JSON: {"dinner":{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "iron_note": 2-4 words, "heart_note": 2-4 words, "ingredients": [str with quantities]}, "shopping_list":[{"category": str, "items": [str]}]}. No other text.`, 4000);
+      const j = parseJson(text);
+      if (j && j.dinner) {
+        updatePlan({ ...plan, dinners: plan.dinners.map((d, i) => (i === idx ? j.dinner : d)), shopping_list: j.shopping_list || plan.shopping_list, rejected });
+      } else setError("Couldn't find a swap — try again.");
+    } catch (e) { setError(`Swap failed — ${e.message}`); }
+    setSwapping(null);
+  };
+
+  const generate = async () => {
+    setBusy(true); setError("");
+    try {
+      const text = await askClaude(`Plan ${nights} dinners for two adults. Constraints:
+${constraints(plan && plan.rejected)}
+- Roughly half batch-friendly, half quick fresh.
+${notes ? `- Extra requests: ${notes}` : ""}
+Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "iron_note": 2-4 words, "heart_note": 2-4 words, "ingredients": [str with quantities]}], "shopping_list":[{"category": str, "items": [str]}]}. Consolidate the shopping list. No other text.`, 4000);
+      const j = parseJson(text);
+      if (j && j.dinners) updatePlan({ ...j, week: todayKey(), checked: [], rejected: (plan && plan.rejected) || [] });
+      else setError("Couldn't generate — try again.");
+    } catch (e) { setError(`Plan generation failed — ${e.message}`); }
+    setBusy(false);
+  };
+
+  const toggleCheck = (item) => {
+    const checked = plan.checked && plan.checked.includes(item)
+      ? plan.checked.filter((i) => i !== item)
+      : [...((plan && plan.checked) || []), item];
+    updatePlan({ ...plan, checked });
+  };
+
+  const copyList = () => {
+    const txt = plan.shopping_list.map((c) => `${c.category}\n${c.items.map((i) => `  - ${i}`).join("\n")}`).join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(txt);
+  };
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Dinner plan</Eyebrow>
+        <Field label="Nights this week">
+          <div style={{ display: "flex", gap: 8 }}>
+            {[3, 4, 5, 6].map((n) => (
+              <button key={n} onClick={() => setNights(n)} style={{
+                flex: 1, height: 44, borderRadius: 12, cursor: "pointer",
+                border: `1.5px solid ${nights === n ? C.pine : C.line}`,
+                background: nights === n ? C.pine : "#FBFBF8",
+                color: nights === n ? "#FFF" : C.ink,
+                fontFamily: F.display, fontWeight: 800, fontSize: 16,
+              }}>{n}</button>
+            ))}
+          </div>
+        </Field>
+        <Field label="Requests (optional)">
+          <input style={inputStyle} placeholder='"Use up the salmon in the freezer"' value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </Field>
+        <Btn full icon="spark" onClick={generate} disabled={busy || !AI_READY}>
+          {busy ? "Planning…" : plan ? "Regenerate plan" : "Generate plan"}
+        </Btn>
+        <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+          <Pill>High protein</Pill><Pill>Iron-rich</Pill><Pill>Heart-smart</Pill><Pill>One-pan</Pill>
+        </div>
+        {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
+      </Card>
+
+      {plan && plan.dinners && plan.dinners.map((d, i) => (
+        <Card key={i} style={{ padding: 15, opacity: swapping === i ? 0.55 : 1 }}>
+          <div onClick={() => toggleRecipe(i)} style={{ cursor: "pointer" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 16 }}>{d.name}</div>
+                <span style={{ color: C.faint, display: "inline-flex", transform: openRecipe === i ? "rotate(180deg)" : "none" }}><Icon d={ICONS.chevron} size={16} /></span>
+              </div>
+              <Pill tone={d.style === "batch" ? "pine" : "amber"}>{d.style === "batch" ? "Batch · leftovers" : "Fresh · quick"}</Pill>
+            </div>
+            <div style={{ fontSize: 13, color: C.faint, margin: "4px 0 9px", lineHeight: 1.45 }}>{d.desc}</div>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine, marginRight: 4 }}>{d.calories} kcal · P {d.protein_g}g</span>
+            <Pill>Iron · {d.iron_note}</Pill>
+            <Pill>Heart · {d.heart_note}</Pill>
+            <span style={{ marginLeft: "auto" }}>
+              <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || busy || !AI_READY}>
+                {swapping === i ? "Swapping…" : "Not for me"}
+              </Btn>
+            </span>
+          </div>
+          {openRecipe === i && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+              {recipeBusy === i && <div style={{ fontSize: 13, color: C.faint }}>Loading recipe…</div>}
+              {d.recipe && (
+                <React.Fragment>
+                  <div style={{ fontFamily: F.mono, fontSize: 12.5, color: C.faint, marginBottom: 10 }}>{d.recipe.time_min} min · serves {d.recipe.servings}</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 5 }}>Ingredients</div>
+                  <div style={{ fontSize: 13.5, lineHeight: 1.7, marginBottom: 12 }}>{d.ingredients && d.ingredients.join(" · ")}</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 5 }}>Steps</div>
+                  {d.recipe.steps.map((s, k) => (
+                    <div key={k} style={{ display: "flex", gap: 10, padding: "5px 0", fontSize: 13.5, lineHeight: 1.5 }}>
+                      <span style={{ fontFamily: F.mono, fontWeight: 600, color: C.pine, flexShrink: 0 }}>{k + 1}</span>
+                      <span>{s}</span>
+                    </div>
+                  ))}
+                </React.Fragment>
+              )}
+            </div>
+          )}
+        </Card>
+      ))}
+
+      {plan && plan.shopping_list && (
+        <Card>
+          <Eyebrow right={<Btn small kind="ghost" icon="copy" onClick={copyList}>Copy</Btn>}>Shopping list</Eyebrow>
+          {plan.shopping_list.map((cat, i) => (
+            <div key={i} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: C.faint, margin: "9px 0 4px" }}>{cat.category}</div>
+              {cat.items.map((item, j) => {
+                const done = plan.checked && plan.checked.includes(item);
+                return (
+                  <div key={j} onClick={() => toggleCheck(item)} style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "7px 0", cursor: "pointer", fontSize: 14.5,
+                    color: done ? C.faint : C.ink, textDecoration: done ? "line-through" : "none",
+                  }}>
+                    <span style={{
+                      width: 19, height: 19, borderRadius: 6, flexShrink: 0,
+                      border: `1.5px solid ${done ? C.pine : "#CFCEC4"}`,
+                      background: done ? C.pine : "#FFF",
+                      display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#FFF",
+                    }}>{done && <Icon d={ICONS.check} size={12} sw={2.6} />}</span>
+                    {item}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {!plan && <div style={{ fontSize: 13.5, color: C.faint, textAlign: "center", padding: 18 }}>Pick your nights and generate a plan.</div>}
+    </div>
+  );
+}
+
+/* ============ Library ============ */
+function LibraryTab({ library, updateLibrary, log, updateLog }) {
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Meal library</Eyebrow>
+        <div style={{ fontSize: 13.5, color: C.faint }}>Repeat meals, one-tap logging.</div>
+      </Card>
+      {library.length === 0 && (
+        <div style={{ fontSize: 13.5, color: C.faint, textAlign: "center", padding: 18, lineHeight: 1.5 }}>
+          Estimate a meal on Today, then "Log + save to Library."
+        </div>
+      )}
+      {library.map((m) => (
+        <Card key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 14 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{m.name}</div>
+            <div style={{ fontFamily: F.mono, fontSize: 12, color: C.faint, marginTop: 2 }}>{m.calories} kcal · P {m.protein_g} · C {m.carbs_g} · F {m.fat_g}</div>
+          </div>
+          <Btn small onClick={() => updateLog({ ...log, meals: [...log.meals, { ...m, id: Date.now() }] })}>Log</Btn>
+          <button onClick={() => updateLibrary(library.filter((x) => x.id !== m.id))} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 6 }}><Icon d={ICONS.x} size={15} /></button>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/* ============ Settings ============ */
+function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestore }) {
+  const [p, setP] = useState(profile);
+  const [saveErr, setSaveErr] = useState("");
+  useEffect(() => { setP(profile); }, [profile]);
+  const set = (k, v) => setP({ ...p, [k]: v });
+  const num = (v) => (v === "" ? "" : Number(v));
+
+  const save = () => {
+    setSaveErr("");
+    const clean = {
+      ...p,
+      age: Number(p.age) || 30,
+      heightFt: Number(p.heightFt) || 5,
+      heightIn: Number(p.heightIn) || 0,
+      weightLb: Number(p.weightLb) || 150,
+      rateLbWk: Number(p.rateLbWk) || 0,
+    };
+    updateProfile(clean);
+    if (saveKey("profile", clean)) done();
+    else setSaveErr("Couldn't save — your browser may be blocking site storage (private browsing?).");
+  };
+
+  return (
+    <div>
+      {firstRun && (
+        <Card style={{ background: `linear-gradient(150deg, ${C.forestUp}, ${C.forest})`, border: "none", color: "#FFF" }}>
+          <div style={{ fontFamily: F.display, fontWeight: 800, fontSize: 17 }}>Welcome to OnPace</div>
+          <div style={{ fontSize: 13.5, color: C.mintDim, marginTop: 4 }}>Set your numbers — anyone you share this with sets their own.</div>
+        </Card>
+      )}
+      <Card>
+        <Eyebrow>Profile</Eyebrow>
+        <Field label="Name (optional)">
+          <input style={inputStyle} value={p.name} onChange={(e) => set("name", e.target.value)} placeholder="Who's tracking" />
+        </Field>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1.4 }}>
+            <Field label="Sex (for BMR)">
+              <select style={inputStyle} value={p.sex} onChange={(e) => set("sex", e.target.value)}>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </Field>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Field label="Age"><input style={inputStyle} inputMode="numeric" value={p.age} onChange={(e) => set("age", num(e.target.value))} /></Field>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}><Field label="Height (ft)"><input style={inputStyle} inputMode="numeric" value={p.heightFt} onChange={(e) => set("heightFt", num(e.target.value))} /></Field></div>
+          <div style={{ flex: 1 }}><Field label="Height (in)"><input style={inputStyle} inputMode="numeric" value={p.heightIn} onChange={(e) => set("heightIn", num(e.target.value))} /></Field></div>
+          <div style={{ flex: 1 }}><Field label="Weight (lb)"><input style={inputStyle} inputMode="numeric" value={p.weightLb} onChange={(e) => set("weightLb", num(e.target.value))} /></Field></div>
+        </div>
+        <Field label={p.rateLbWk > 0 ? `Goal — lose ${p.rateLbWk} lb/week` : "Goal — maintain weight"}>
+          <input type="range" min="0" max="1.5" step="0.25" value={p.rateLbWk} onChange={(e) => set("rateLbWk", Number(e.target.value))} style={{ width: "100%", accentColor: C.pine }} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.faint, marginTop: 2 }}>
+            <span>Maintain</span><span>Moderate</span><span>1.5 lb/wk</span>
+          </div>
+        </Field>
+        <Field label="Kitchen facts">
+          <textarea style={{ ...inputStyle, minHeight: 76, resize: "vertical" }}
+            placeholder={'Standing truths about your kitchen, one per line — e.g. "Protein shakes always use 2 scoops Orgain Organic vanilla."'}
+            value={p.kitchenNotes || ""} onChange={(e) => set("kitchenNotes", e.target.value)} />
+          <div style={{ fontSize: 12, color: C.faint, marginTop: 4 }}>Applied automatically to meal estimates, suggestions, and dinner plans.</div>
+        </Field>
+        <Btn full onClick={save}>Save profile</Btn>
+        {saveErr && <div style={{ marginTop: 9, fontSize: 13, color: C.red }}>{saveErr}</div>}
+      </Card>
+      <BackupCard appData={appData} onRestore={onRestore} />
+      <Card>
+        <div style={{ fontSize: 13, color: C.faint, lineHeight: 1.6 }}>
+          Targets use Mifflin-St Jeor plus your logged training. Protein holds at ~0.9g/lb to protect muscle; calories
+          never drop below a safe floor. If the scale disagrees over 2–3 weeks, nudge the goal slider. Data lives in
+          this browser only — Export a backup occasionally, and use it to move between devices.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function BackupCard({ appData, onRestore }) {
+  const [text, setText] = useState("");
+  const [msg, setMsg] = useState("");
+  const doExport = () => {
+    const blob = JSON.stringify(appData);
+    setText(blob);
+    if (navigator.clipboard) navigator.clipboard.writeText(blob);
+    setMsg("Backup copied to clipboard — paste it somewhere safe (Notes works).");
+  };
+  const doImport = () => {
+    try {
+      const d = JSON.parse(text);
+      if (!d || typeof d !== "object") throw new Error();
+      onRestore(d);
+      setMsg("Restored and saved.");
+    } catch { setMsg("That doesn't look like a valid backup — paste the exact exported text."); }
+  };
+  return (
+    <Card>
+      <Eyebrow right={
+        <div style={{ display: "flex", gap: 7 }}>
+          <Btn small kind="ghost" onClick={doExport}>Export</Btn>
+          <Btn small onClick={doImport} disabled={!text.trim()}>Restore</Btn>
+        </div>
+      }>Backup</Eyebrow>
+      <textarea style={{ ...inputStyle, minHeight: 64, resize: "vertical", fontFamily: F.mono, fontSize: 11.5 }}
+        placeholder="Export puts your data here (and on the clipboard). Paste a backup here and tap Restore to load it."
+        value={text} onChange={(e) => setText(e.target.value)} />
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: C.faint }}>{msg}</div>}
+    </Card>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
