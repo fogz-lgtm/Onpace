@@ -27,9 +27,10 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo } = React;
 
-/* ============ CONFIG — paste your Cloudflare Worker URL here ============ */
-const PROXY_URL = "PASTE_YOUR_WORKER_URL_HERE"; // e.g. "https://onpace-proxy.yourname.workers.dev"
-const AI_READY = PROXY_URL.startsWith("https://");
+/* ============ AI config — your Anthropic API key lives in this browser's
+   localStorage (You tab → AI features), never in this file or the repo ============ */
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const getApiKey = () => loadKey("apikey", "");
 
 /* ============ tokens ============ */
 const C = {
@@ -70,7 +71,8 @@ function computeTargets(p, workoutCals) {
 
 /* ============ AI via proxy ============ */
 async function askClaude(prompt, maxTokens = 1000, timeoutMs = 60000, imageBase64 = null) {
-  if (!AI_READY) throw new Error("AI not configured — paste your worker URL into index.html");
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("AI not configured — add your Anthropic API key in the You tab");
   const content = imageBase64
     ? [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }]
     : prompt;
@@ -78,9 +80,14 @@ async function askClaude(prompt, maxTokens = 1000, timeoutMs = 60000, imageBase6
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let data;
   try {
-    const res = await fetch(PROXY_URL, {
+    const res = await fetch(ANTHROPIC_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: maxTokens,
@@ -295,8 +302,10 @@ function App() {
   const [log, setLog] = useState({ meals: [], workouts: [] });
   const [library, setLibrary] = useState([]);
   const [plan, setPlan] = useState(null);
+  const [apiKey, setApiKey] = useState("");
   const [firstRun, setFirstRun] = useState(false);
   const [date, setDate] = useState(todayKey());
+  const aiReady = !!apiKey.trim();
 
   // live midnight rollover
   useEffect(() => {
@@ -319,6 +328,7 @@ function App() {
     setLog(loadKey(`log:${date}`, { meals: [], workouts: [] }));
     setLibrary(loadKey("library", []));
     setPlan(loadKey("plan-current", null));
+    setApiKey(loadKey("apikey", ""));
   }, []);
 
   const workoutCals = log.workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0);
@@ -334,6 +344,7 @@ function App() {
   const updateLibrary = (n) => { setLibrary(n); saveKey("library", n); };
   const updateProfile = (n) => { setProfile(n); saveKey("profile", n); };
   const updatePlan = (n) => { setPlan(n); saveKey("plan-current", n); };
+  const updateApiKey = (n) => { setApiKey(n); saveKey("apikey", n); };
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92 }}>
@@ -344,11 +355,11 @@ function App() {
         </div>
       </header>
 
-      {!AI_READY && (
+      {!aiReady && (
         <div style={{ maxWidth: 560, margin: "0 auto", padding: "0 16px" }}>
           <Card style={{ background: C.amberSoft, border: "none" }}>
             <div style={{ fontSize: 13, color: C.amberDeep, fontWeight: 600, lineHeight: 1.5 }}>
-              AI features are off — paste your Cloudflare Worker URL into PROXY_URL in index.html (see README).
+              AI features are off — add your Anthropic API key in the You tab (one-time, stays on this device).
               Logging from your Library and manual entry still work.
             </div>
           </Card>
@@ -356,11 +367,11 @@ function App() {
       )}
 
       <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
-        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary }} />}
-        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan }} />}
+        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }} />}
+        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady }} />}
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
         {tab === "settings" && (
-          <SettingsTab {...{ profile, updateProfile, firstRun }} done={() => { setFirstRun(false); setTab("today"); }}
+          <SettingsTab {...{ profile, updateProfile, firstRun, apiKey, updateApiKey }} done={() => { setFirstRun(false); setTab("today"); }}
             appData={{ profile, log, library, plan }}
             onRestore={(d) => {
               if (d.profile) updateProfile({ ...DEFAULT_PROFILE, ...d.profile });
@@ -393,7 +404,7 @@ function App() {
 }
 
 /* ============ Today ============ */
-function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary }) {
+function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }) {
   const [mealText, setMealText] = useState("");
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState(null);
@@ -523,7 +534,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
           <React.Fragment>
             <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText} onChange={(e) => setSuggestText(e.target.value)} />
             <div style={{ marginTop: 10 }}>
-              <Btn icon="spark" onClick={getSuggestions} disabled={estimating || !AI_READY} full>
+              <Btn icon="spark" onClick={getSuggestions} disabled={estimating || !aiReady} full>
                 {estimating ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
               </Btn>
             </div>
@@ -548,13 +559,13 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
             <textarea style={{ ...inputStyle, minHeight: 62, resize: "vertical" }} placeholder='"Office chicken burrito bowl, no rice, extra beans"' value={mealText} onChange={(e) => setMealText(e.target.value)} />
             <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <Btn icon="spark" onClick={estimateMeal} disabled={estimating || !mealText.trim() || !AI_READY} full>
+                <Btn icon="spark" onClick={estimateMeal} disabled={estimating || !mealText.trim() || !aiReady} full>
                   {estimating ? "Estimating…" : "Estimate macros"}
                 </Btn>
               </div>
-              <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, color: C.pine, opacity: estimating || !AI_READY ? 0.45 : 1 }} title="Snap a meal or nutrition label">
+              <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, color: C.pine, opacity: estimating || !aiReady ? 0.45 : 1 }} title="Snap a meal or nutrition label">
                 <Icon d={ICONS.camera} size={20} />
-                <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={estimating || !AI_READY}
+                <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={estimating || !aiReady}
                   onChange={(e) => { estimatePhoto(e.target.files && e.target.files[0]); e.target.value = ""; }} />
               </label>
             </div>
@@ -579,7 +590,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
           <React.Fragment>
             <textarea style={{ ...inputStyle, minHeight: 92, resize: "vertical" }} placeholder="Paste this week's office menu…" value={menuText} onChange={(e) => setMenuText(e.target.value)} />
             <div style={{ marginTop: 10 }}>
-              <Btn icon="spark" onClick={analyzeMenu} disabled={estimating || !menuText.trim() || !AI_READY} full>
+              <Btn icon="spark" onClick={analyzeMenu} disabled={estimating || !menuText.trim() || !aiReady} full>
                 {estimating ? "Ranking…" : `Best picks for ${Math.max(remaining, 0)} kcal left`}
               </Btn>
             </div>
@@ -620,7 +631,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
 }
 
 /* ============ Plan ============ */
-function PlanTab({ profile, targets, plan, updatePlan }) {
+function PlanTab({ profile, targets, plan, updatePlan, aiReady }) {
   const [nights, setNights] = useState(4);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -716,7 +727,7 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"
         <Field label="Requests (optional)">
           <input style={inputStyle} placeholder='"Use up the salmon in the freezer"' value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
-        <Btn full icon="spark" onClick={generate} disabled={busy || !AI_READY}>
+        <Btn full icon="spark" onClick={generate} disabled={busy || !aiReady}>
           {busy ? "Planning…" : plan ? "Regenerate plan" : "Generate plan"}
         </Btn>
         <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
@@ -742,7 +753,7 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"
             <Pill>Iron · {d.iron_note}</Pill>
             <Pill>Heart · {d.heart_note}</Pill>
             <span style={{ marginLeft: "auto" }}>
-              <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || busy || !AI_READY}>
+              <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || busy || !aiReady}>
                 {swapping === i ? "Swapping…" : "Not for me"}
               </Btn>
             </span>
@@ -830,7 +841,7 @@ function LibraryTab({ library, updateLibrary, log, updateLog }) {
 }
 
 /* ============ Settings ============ */
-function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestore }) {
+function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestore, apiKey, updateApiKey }) {
   const [p, setP] = useState(profile);
   const [saveErr, setSaveErr] = useState("");
   useEffect(() => { setP(profile); }, [profile]);
@@ -898,6 +909,7 @@ function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestor
         <Btn full onClick={save}>Save profile</Btn>
         {saveErr && <div style={{ marginTop: 9, fontSize: 13, color: C.red }}>{saveErr}</div>}
       </Card>
+      <AiCard apiKey={apiKey} updateApiKey={updateApiKey} />
       <BackupCard appData={appData} onRestore={onRestore} />
       <Card>
         <div style={{ fontSize: 13, color: C.faint, lineHeight: 1.6 }}>
@@ -907,6 +919,38 @@ function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestor
         </div>
       </Card>
     </div>
+  );
+}
+
+function AiCard({ apiKey, updateApiKey }) {
+  const [draft, setDraft] = useState(apiKey);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { setDraft(apiKey); }, [apiKey]);
+  const save = () => {
+    const k = draft.trim();
+    updateApiKey(k);
+    setMsg(k ? "Key saved on this device — AI features are on." : "Key removed — AI features are off.");
+  };
+  return (
+    <Card>
+      <Eyebrow right={apiKey ? <Pill>On</Pill> : <Pill tone="amber">Off</Pill>}>AI features</Eyebrow>
+      <Field label="Anthropic API key">
+        <input style={inputStyle} type="password" autoComplete="off" placeholder="sk-ant-…"
+          value={draft} onChange={(e) => setDraft(e.target.value)} />
+      </Field>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn small onClick={save} disabled={draft.trim() === apiKey}>Save key</Btn>
+        {apiKey && <Btn small kind="ghost" onClick={() => { setDraft(""); updateApiKey(""); setMsg("Key removed — AI features are off."); }}>Remove</Btn>}
+      </div>
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: C.faint }}>{msg}</div>}
+      <div style={{ fontSize: 12, color: C.faint, marginTop: 10, lineHeight: 1.55 }}>
+        Powers meal estimates, photo reading, menu ranking, and dinner plans. Create a key at
+        console.anthropic.com → API Keys (needs a little billing credit; typical use is $1–3/month).
+        The key stays in this browser on this device — it's never in the app's code and isn't included
+        in backups, so re-enter it if you move to a new phone. Anyone you share the app's URL with
+        uses their own key.
+      </div>
+    </Card>
   );
 }
 

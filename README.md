@@ -1,8 +1,9 @@
 # OnPace
 
 A personal calorie / macro tracker with AI meal estimation, photo reading, menu
-ranking, and weekly dinner planning. One HTML file, hosted free on GitHub Pages,
-with a tiny Cloudflare Worker proxying calls to the Anthropic API.
+ranking, and weekly dinner planning. One HTML file, hosted free on GitHub Pages.
+No backend: the app calls the Anthropic API directly from your browser, using an
+API key you enter once on your device.
 
 ## How this repo hosts the app
 
@@ -12,39 +13,25 @@ lives at:
 
 **https://fogz-lgtm.github.io/Onpace/**
 
-If the first workflow run fails with a Pages error, enable it once by hand:
-repo **Settings → Pages → Source: "GitHub Actions"**, then re-run the workflow
-from the Actions tab.
+One-time setup (repo owner, in Settings): make the repo **public** (free
+accounts can only use Pages on public repos), then **Settings → Pages →
+Source: "GitHub Actions"**. If the first workflow run failed before this was
+done, re-run it from the Actions tab.
 
-## One-time setup — the AI proxy (Cloudflare Worker, free)
+## Turn on the AI features
 
-The app's AI features (meal estimation, photo reading, suggestions, dinner
-plans) call the Anthropic API. Your API key must never sit in a public web
-page, so a tiny proxy holds it.
+The AI features (meal estimation, photo reading, suggestions, dinner plans)
+call the Anthropic API with your personal key. The key is stored only in your
+browser's localStorage on your device — it never appears in this repo or the
+hosted page.
 
 1. Get an API key: sign in at https://console.anthropic.com → API Keys →
    Create Key. Copy it. (You'll need a small amount of billing credit; typical
    personal use is $1–3/month.)
-2. Sign up free at https://dash.cloudflare.com → Workers & Pages → Create →
-   Create Worker.
-3. Name it `onpace-proxy`, deploy the hello-world, then click **Edit code**.
-4. Delete everything and paste in the contents of `worker.js` (in this repo).
-   Click **Deploy**.
-5. Go to the worker's **Settings → Variables and Secrets → Add**:
-   - Type: **Secret**, Name: `ANTHROPIC_API_KEY`, Value: your API key.
-     Save & deploy.
-6. Copy the worker URL (looks like `https://onpace-proxy.yourname.workers.dev`).
+2. In the app: **You** tab → **AI features** → paste the key → Save key.
 
-## Point the app at your worker
-
-1. Edit `index.html` (on GitHub: open the file → pencil icon).
-2. Near the top, find:
-   `const PROXY_URL = "PASTE_YOUR_WORKER_URL_HERE";`
-   Replace the placeholder with your worker URL (keep the quotes).
-3. Commit — the site redeploys automatically in about a minute.
-
-Until then the app still works for manual logging and the Library; only the AI
-features are off (it shows a banner saying so).
+Until then the app still works for manual logging and the Library; it shows a
+banner while AI features are off.
 
 ## Install on your iPhone
 
@@ -56,16 +43,16 @@ app.
 
 - **Data** lives in the browser via localStorage — it persists across launches
   on the same device/browser. Use Settings → Backup → Export/Restore to move
-  between devices or as insurance.
+  between devices or as insurance. The API key is deliberately *not* included
+  in backups — re-enter it on a new device.
 - **Training**: enter your workout calories from your watch or Strava (single
   field). No Strava integration in this version — it can be added later with
   Strava's OAuth API.
 - **Sharing**: send anyone the URL; they get their own blank copy on their own
-  device. Their AI calls run through *your* worker (your key). To restrict
-  that, set the CORS origin in `worker.js` to your Pages domain
-  (`https://fogz-lgtm.github.io`), or give trusted people their own worker.
+  device and enter their own API key. Your key and data never leave your
+  device.
 - **Updating the app**: edit `index.html` in the repo; changes go live in
   ~1 minute. If your phone shows a stale version, pull-to-refresh or reinstall
   the home-screen icon.
-- **Privacy**: meal text/photos go to your Cloudflare worker, then to
-  Anthropic's API for estimation. Nothing else leaves the device.
+- **Privacy**: meal text/photos go directly from your device to Anthropic's
+  API for estimation. Nothing else leaves the device.
