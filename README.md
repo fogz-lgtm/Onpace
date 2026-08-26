@@ -33,6 +33,28 @@ hosted page.
 Until then the app still works for manual logging and the Library; it shows a
 banner while AI features are off.
 
+## Connect Strava (optional)
+
+"Sync Strava" on the Today tab pulls today's workouts and their calories into
+your training log. Like the AI key, this works without a backend: you create
+your own free Strava API application and its credentials live only on your
+device.
+
+1. Go to https://www.strava.com/settings/api and create an API application
+   (any name/website; category "Training"). For **Authorization Callback
+   Domain** enter exactly: `fogz-lgtm.github.io`
+2. In OnPace (inside the installed app, not a separate Safari tab — they don't
+   share storage): **You** tab → **Strava** card → paste the app's Client ID
+   and Client Secret → **Connect Strava**.
+3. Approve on the Strava page it opens; you'll land back in OnPace showing
+   "Connected".
+4. On the **Today** tab, tap **Sync Strava** after a workout. Already-synced
+   activities are skipped, so tapping repeatedly is safe.
+
+Calories come from Strava's per-activity figure (or the ride's kilojoules when
+that's all Strava has). Activities without calorie data are skipped — add
+those manually.
+
 ## Install on your iPhone
 
 Open the site URL in Safari → Share → **Add to Home Screen** → it installs
@@ -45,9 +67,8 @@ app.
   on the same device/browser. Use Settings → Backup → Export/Restore to move
   between devices or as insurance. The API key is deliberately *not* included
   in backups — re-enter it on a new device.
-- **Training**: enter your workout calories from your watch or Strava (single
-  field). No Strava integration in this version — it can be added later with
-  Strava's OAuth API.
+- **Training**: enter workout calories manually, or connect Strava (below) and
+  pull them with one tap.
 - **Sharing**: send anyone the URL; they get their own blank copy on their own
   device and enter their own API key. Your key and data never leave your
   device.
