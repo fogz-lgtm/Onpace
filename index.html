@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "6 — Strava auto-sync"; // bump when index.html changes
+const APP_BUILD = "7 — plan upgrades + Suggest tab"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -51,6 +51,8 @@ const todayKey = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+
+const DEFAULT_PREFS = ["High protein", "Iron-rich", "Heart-smart", "One-pan"];
 
 const DEFAULT_PROFILE = {
   name: "", sex: "male", age: 38, heightFt: 5, heightIn: 9, weightLb: 170, rateLbWk: 1.0,
@@ -241,6 +243,15 @@ const Field = ({ label, children }) => (
   </label>
 );
 
+// like Field but not a <label> — required around groups of buttons, since a
+// label forwards clicks to its first button and double-fires actions
+const Group = ({ label, children }) => (
+  <div style={{ marginBottom: 14 }}>
+    <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 6 }}>{label}</div>
+    {children}
+  </div>
+);
+
 const Pill = ({ children, tone = "pine" }) => {
   const tones = {
     pine: { background: C.pineSoft, color: C.pine },
@@ -328,6 +339,7 @@ function App() {
   const [log, setLog] = useState({ meals: [], workouts: [] });
   const [library, setLibrary] = useState([]);
   const [plan, setPlan] = useState(null);
+  const [prefs, setPrefs] = useState(DEFAULT_PREFS);
   const [apiKey, setApiKey] = useState("");
   const [strava, setStrava] = useState(null);
   const [stravaMsg, setStravaMsg] = useState("");
@@ -356,6 +368,7 @@ function App() {
     setLog(loadKey(`log:${date}`, { meals: [], workouts: [] }));
     setLibrary(loadKey("library", []));
     setPlan(loadKey("plan-current", null));
+    setPrefs(loadKey("plan-prefs", DEFAULT_PREFS));
     setApiKey(loadKey("apikey", ""));
     setStrava(loadKey("strava", null));
   }, []);
@@ -395,6 +408,7 @@ function App() {
   const updateLibrary = (n) => { setLibrary(n); saveKey("library", n); };
   const updateProfile = (n) => { setProfile(n); saveKey("profile", n); };
   const updatePlan = (n) => { setPlan(n); saveKey("plan-current", n); };
+  const updatePrefs = (n) => { setPrefs(n); saveKey("plan-prefs", n); };
   const updateApiKey = (n) => { setApiKey(n); saveKey("apikey", n); };
   const updateStrava = (n) => { setStrava(n); saveKey("strava", n); };
 
@@ -475,23 +489,25 @@ function App() {
 
       <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
         {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava: doStravaSync }} />}
-        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady }} />}
+        {tab === "suggest" && <SuggestTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }} />}
+        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs }} />}
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
         {tab === "settings" && (
           <SettingsTab {...{ profile, updateProfile, firstRun, apiKey, updateApiKey, strava, updateStrava, stravaMsg }} done={() => { setFirstRun(false); setTab("today"); }}
-            appData={{ profile, log, library, plan }}
+            appData={{ profile, log, library, plan, prefs }}
             onRestore={(d) => {
               if (d.profile) updateProfile({ ...DEFAULT_PROFILE, ...d.profile });
               if (d.log) updateLog({ meals: d.log.meals || [], workouts: d.log.workouts || [] });
               if (d.library) updateLibrary(d.library);
               if (d.plan) updatePlan(d.plan);
+              if (d.prefs) updatePrefs(d.prefs);
             }} />
         )}
       </main>
 
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.forest, borderTop: "1px solid rgba(155,220,176,0.15)", boxShadow: "0 -8px 30px rgba(15,36,27,0.25)", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div style={{ display: "flex", maxWidth: 560, margin: "0 auto" }}>
-          {[["today", "Today", "flame"], ["plan", "Plan", "calendar"], ["library", "Library", "bookmark"], ["settings", "You", "sliders"]].map(([k, label, ic]) => {
+          {[["today", "Today", "flame"], ["suggest", "Suggest", "spark"], ["plan", "Plan", "calendar"], ["library", "Library", "bookmark"], ["settings", "You", "sliders"]].map(([k, label, ic]) => {
             const active = tab === k;
             return (
               <button key={k} onClick={() => setTab(k)} style={{
@@ -519,8 +535,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   const [mode, setMode] = useState("meal");
   const [menuText, setMenuText] = useState("");
   const [menuPicks, setMenuPicks] = useState(null);
-  const [suggestText, setSuggestText] = useState("");
-  const [suggestions, setSuggestions] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [wCal, setWCal] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -583,17 +597,6 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     setEstimating(false);
   };
 
-  const getSuggestions = async () => {
-    setEstimating(true); setError(""); setSuggestions(null);
-    try {
-      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; I'm cutting while keeping muscle, so prioritize closing the protein gap. Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
-      const j = parseJson(text);
-      if (j && j.suggestions) setSuggestions(j.suggestions);
-      else setError("Couldn't get suggestions — try again.");
-    } catch (e) { setError(`Suggestion failed — ${e.message}`); }
-    setEstimating(false);
-  };
-
   const addManualWorkout = () => {
     const cals = Number(wCal);
     if (!cals) return;
@@ -604,7 +607,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   const removeItem = (kind, id) => updateLog({ ...log, [kind]: log[kind].filter((x) => x.id !== id) });
 
   const seg = (key, label) => (
-    <button onClick={() => { setMode(key); setError(""); setEstimate(null); setMenuPicks(null); setSuggestions(null); }} style={{
+    <button onClick={() => { setMode(key); setError(""); setEstimate(null); setMenuPicks(null); }} style={{
       flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
       background: mode === key ? C.surface : "transparent",
       color: mode === key ? C.ink : C.faint,
@@ -653,32 +656,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
         <div style={{ display: "flex", gap: 4, background: C.bg, borderRadius: 12, padding: 4, marginBottom: 12 }}>
           {seg("meal", "Log")}
           {seg("menu", "Work menu")}
-          {seg("suggest", "Suggest")}
         </div>
-
-        {mode === "suggest" && (
-          <React.Fragment>
-            <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText} onChange={(e) => setSuggestText(e.target.value)} />
-            <div style={{ marginTop: 10 }}>
-              <Btn icon="spark" onClick={getSuggestions} disabled={estimating || !aiReady} full>
-                {estimating ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
-              </Btn>
-            </div>
-            {suggestions && suggestions.map((s, i) => (
-              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
-                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
-                    <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </React.Fragment>
-        )}
 
         {mode === "meal" && (
           <React.Fragment>
@@ -756,21 +734,98 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
   );
 }
 
+/* ============ Suggest ============ */
+function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }) {
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestions, setSuggestions] = useState(null);
+  const [thinking, setThinking] = useState(false);
+  const [error, setError] = useState("");
+
+  const remaining = targets.calories - eaten;
+  const proteinLeft = Math.max(targets.protein - macros.protein, 0);
+  const kitchen = profile.kitchenNotes?.trim()
+    ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
+
+  const getSuggestions = async () => {
+    setThinking(true); setError(""); setSuggestions(null);
+    try {
+      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; I'm cutting while keeping muscle, so prioritize closing the protein gap. Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
+      const j = parseJson(text);
+      if (j && j.suggestions) setSuggestions(j.suggestions);
+      else setError("Couldn't get suggestions — try again.");
+    } catch (e) { setError(`Suggestion failed — ${e.message}`); }
+    setThinking(false);
+  };
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>What should I eat?</Eyebrow>
+        <input style={inputStyle} placeholder='"Snack", "breakfast", "something sweet"…' value={suggestText}
+          onChange={(e) => setSuggestText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") getSuggestions(); }} />
+        <div style={{ marginTop: 10 }}>
+          <Btn icon="spark" onClick={getSuggestions} disabled={thinking || !aiReady} full>
+            {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
+          </Btn>
+        </div>
+        {suggestions && suggestions.map((s, i) => (
+          <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
+            <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
+                <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
+              </div>
+            </div>
+          </div>
+        ))}
+        {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
+      </Card>
+      <div style={{ fontSize: 13, color: C.faint, textAlign: "center", padding: "0 18px", lineHeight: 1.5 }}>
+        Sized to what's left of today's budget — log meals first for sharper suggestions.
+      </div>
+    </div>
+  );
+}
+
 /* ============ Plan ============ */
-function PlanTab({ profile, targets, plan, updatePlan, aiReady }) {
+const DINNER_JSON = `{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "highlights": [2-3 very short "Label · detail" strings showing how it meets the priorities], "ingredients": [str with quantities]}`;
+
+function PlanTab({ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs }) {
   const [nights, setNights] = useState(4);
   const [notes, setNotes] = useState("");
+  const [newTag, setNewTag] = useState("");
   const [busy, setBusy] = useState(false);
   const [swapping, setSwapping] = useState(null);
+  const [adjustOpen, setAdjustOpen] = useState(null);
+  const [adjustText, setAdjustText] = useState("");
+  const [adjusting, setAdjusting] = useState(null);
   const [openRecipe, setOpenRecipe] = useState(null);
   const [recipeBusy, setRecipeBusy] = useState(null);
   const [error, setError] = useState("");
 
-  const constraints = (avoid) => `- Cook is cutting at ~${targets.calories} kcal/day, ${targets.protein}g protein; dinners high-protein, 550-700 kcal/serving.
-- Partner priorities: iron-rich, heart-healthy / cholesterol-friendly (low sat fat; fish, legumes, leafy greens, whole grains).
-- Style: one-pan/sheet-pan leaning; mix of batch-friendly (leftovers) and quick fresh.
+  const remember = (names) => {
+    const h = [...loadKey("dinner-history", []), ...names].slice(-40);
+    saveKey("dinner-history", h);
+  };
+
+  const constraints = (avoid) => {
+    const recent = loadKey("dinner-history", []);
+    return `- Cook is cutting at ~${targets.calories} kcal/day, ${targets.protein}g protein/day; dinners 550-700 kcal/serving.
+${prefs.length ? `- Priorities for every dinner: ${prefs.join("; ")}.` : ""}
 ${profile.kitchenNotes?.trim() ? `- Standing kitchen facts — apply when relevant: ${profile.kitchenNotes.trim()}` : ""}
-${avoid && avoid.length ? `- NEVER suggest these rejected meals or close variants: ${avoid.join("; ")}.` : ""}`;
+${avoid && avoid.length ? `- NEVER suggest these rejected meals or close variants: ${avoid.join("; ")}.` : ""}
+${recent.length ? `- Recently planned — do NOT repeat these or close variants; aim for genuinely different cuisines and proteins: ${recent.slice(-24).join("; ")}.` : ""}`;
+  };
+
+  const addTag = () => {
+    const t = newTag.trim();
+    if (!t) return;
+    if (!prefs.some((p) => p.toLowerCase() === t.toLowerCase())) updatePrefs([...prefs, t]);
+    setNewTag("");
+  };
 
   const toggleRecipe = async (idx) => {
     if (openRecipe === idx) { setOpenRecipe(null); return; }
@@ -797,13 +852,38 @@ ${avoid && avoid.length ? `- NEVER suggest these rejected meals or close variant
 ${constraints(rejected)}
 Keeping these dinners (with their ingredients): ${JSON.stringify(keeping.map((d) => ({ name: d.name, style: d.style, ingredients: d.ingredients })))}
 Suggest ONE new dinner, different from everything above, style "${rejectedMeal.style}". Then rebuild the consolidated shopping list covering the new dinner plus ALL kept dinners.
-Respond ONLY with compact single-line JSON: {"dinner":{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "iron_note": 2-4 words, "heart_note": 2-4 words, "ingredients": [str with quantities]}, "shopping_list":[{"category": str, "items": [str]}]}. No other text.`, 4000);
+Respond ONLY with compact single-line JSON: {"dinner":${DINNER_JSON}, "shopping_list":[{"category": str, "items": [str]}]}. No other text.`, 4000);
       const j = parseJson(text);
       if (j && j.dinner) {
         updatePlan({ ...plan, dinners: plan.dinners.map((d, i) => (i === idx ? j.dinner : d)), shopping_list: j.shopping_list || plan.shopping_list, rejected });
+        remember([j.dinner.name]);
       } else setError("Couldn't find a swap — try again.");
     } catch (e) { setError(`Swap failed — ${e.message}`); }
     setSwapping(null);
+  };
+
+  const adjustDinner = async (idx) => {
+    const change = adjustText.trim();
+    if (!change) return;
+    setAdjusting(idx); setError("");
+    const d = plan.dinners[idx];
+    const keeping = plan.dinners.filter((_, i) => i !== idx);
+    try {
+      const text = await askClaude(`Revise ONE dinner in a weekly plan for two adults. Constraints:
+${constraints(plan.rejected)}
+Current dinner: ${JSON.stringify({ name: d.name, style: d.style, desc: d.desc, ingredients: d.ingredients })}
+Requested change: "${change}". Apply it while keeping the dinner as close to the original as makes sense, same style "${d.style}".
+Other dinners staying (with their ingredients): ${JSON.stringify(keeping.map((x) => ({ name: x.name, ingredients: x.ingredients })))}
+Then rebuild the consolidated shopping list covering the revised dinner plus ALL other dinners.
+Respond ONLY with compact single-line JSON: {"dinner":${DINNER_JSON}, "shopping_list":[{"category": str, "items": [str]}]}. No other text.`, 4000);
+      const j = parseJson(text);
+      if (j && j.dinner) {
+        updatePlan({ ...plan, dinners: plan.dinners.map((x, i) => (i === idx ? j.dinner : x)), shopping_list: j.shopping_list || plan.shopping_list });
+        remember([j.dinner.name]);
+        setAdjustOpen(null); setAdjustText("");
+      } else setError("Couldn't apply that change — try rewording it.");
+    } catch (e) { setError(`Adjustment failed — ${e.message}`); }
+    setAdjusting(null);
   };
 
   const generate = async () => {
@@ -811,12 +891,14 @@ Respond ONLY with compact single-line JSON: {"dinner":{"name": str, "style": "ba
     try {
       const text = await askClaude(`Plan ${nights} dinners for two adults. Constraints:
 ${constraints(plan && plan.rejected)}
-- Roughly half batch-friendly, half quick fresh.
+- Roughly half batch-friendly, half quick fresh. Vary cuisines and proteins across the week.
 ${notes ? `- Extra requests: ${notes}` : ""}
-Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "iron_note": 2-4 words, "heart_note": 2-4 words, "ingredients": [str with quantities]}], "shopping_list":[{"category": str, "items": [str]}]}. Consolidate the shopping list. No other text.`, 4000);
+Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[${DINNER_JSON}], "shopping_list":[{"category": str, "items": [str]}]}. Consolidate the shopping list. No other text.`, 4000);
       const j = parseJson(text);
-      if (j && j.dinners) updatePlan({ ...j, week: todayKey(), checked: [], rejected: (plan && plan.rejected) || [] });
-      else setError("Couldn't generate — try again.");
+      if (j && j.dinners) {
+        updatePlan({ ...j, week: todayKey(), checked: [], rejected: (plan && plan.rejected) || [] });
+        remember(j.dinners.map((d) => d.name));
+      } else setError("Couldn't generate — try again.");
     } catch (e) { setError(`Plan generation failed — ${e.message}`); }
     setBusy(false);
   };
@@ -837,7 +919,7 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"
     <div>
       <Card>
         <Eyebrow>Dinner plan</Eyebrow>
-        <Field label="Nights this week">
+        <Group label="Nights this week">
           <div style={{ display: "flex", gap: 8 }}>
             {[3, 4, 5, 6].map((n) => (
               <button key={n} onClick={() => setNights(n)} style={{
@@ -849,21 +931,36 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"
               }}>{n}</button>
             ))}
           </div>
-        </Field>
+        </Group>
         <Field label="Requests (optional)">
           <input style={inputStyle} placeholder='"Use up the salmon in the freezer"' value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
+        <Group label="Priorities — every dinner honors these">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: prefs.length ? 10 : 0 }}>
+            {prefs.map((t) => (
+              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700, padding: "4px 6px 4px 10px", borderRadius: 999, background: C.pineSoft, color: C.pine }}>
+                {t}
+                <button onClick={() => updatePrefs(prefs.filter((x) => x !== t))} aria-label={`Remove ${t}`}
+                  style={{ border: "none", background: "none", color: C.pine, cursor: "pointer", padding: 2, display: "inline-flex" }}>
+                  <Icon d={ICONS.x} size={11} sw={2.4} />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...inputStyle, flex: 1 }} placeholder='Add one — "Mediterranean", "low sodium"…' value={newTag}
+              onChange={(e) => setNewTag(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addTag(); }} />
+            <Btn small kind="ghost" icon="plus" onClick={addTag} disabled={!newTag.trim()}>Add</Btn>
+          </div>
+        </Group>
         <Btn full icon="spark" onClick={generate} disabled={busy || !aiReady}>
           {busy ? "Planning…" : plan ? "Regenerate plan" : "Generate plan"}
         </Btn>
-        <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
-          <Pill>High protein</Pill><Pill>Iron-rich</Pill><Pill>Heart-smart</Pill><Pill>One-pan</Pill>
-        </div>
         {error && <div style={{ marginTop: 10, fontSize: 13, color: C.red }}>{error}</div>}
       </Card>
 
       {plan && plan.dinners && plan.dinners.map((d, i) => (
-        <Card key={i} style={{ padding: 15, opacity: swapping === i ? 0.55 : 1 }}>
+        <Card key={i} style={{ padding: 15, opacity: swapping === i || adjusting === i ? 0.55 : 1 }}>
           <div onClick={() => toggleRecipe(i)} style={{ cursor: "pointer" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -876,14 +973,26 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[{"
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine, marginRight: 4 }}>{d.calories} kcal · P {d.protein_g}g</span>
-            <Pill>Iron · {d.iron_note}</Pill>
-            <Pill>Heart · {d.heart_note}</Pill>
-            <span style={{ marginLeft: "auto" }}>
-              <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || busy || !aiReady}>
+            {(d.highlights || [d.iron_note && `Iron · ${d.iron_note}`, d.heart_note && `Heart · ${d.heart_note}`].filter(Boolean)).map((h, k) => (
+              <Pill key={k}>{h}</Pill>
+            ))}
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <Btn small kind="ghost" icon="sliders" onClick={() => { setAdjustOpen(adjustOpen === i ? null : i); setAdjustText(""); }}
+                disabled={swapping !== null || adjusting !== null || busy || !aiReady}>Tweak</Btn>
+              <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || adjusting !== null || busy || !aiReady}>
                 {swapping === i ? "Swapping…" : "Not for me"}
               </Btn>
             </span>
           </div>
+          {adjustOpen === i && (
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <input style={{ ...inputStyle, flex: 1 }} placeholder={'"I don\'t have kale", "swap pork for chicken"…'} value={adjustText}
+                onChange={(e) => setAdjustText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") adjustDinner(i); }} />
+              <Btn small onClick={() => adjustDinner(i)} disabled={!adjustText.trim() || adjusting !== null || swapping !== null || busy}>
+                {adjusting === i ? "Fixing…" : "Apply"}
+              </Btn>
+            </div>
+          )}
           {openRecipe === i && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
               {recipeBusy === i && <div style={{ fontSize: 13, color: C.faint }}>Loading recipe…</div>}
