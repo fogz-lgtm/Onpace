@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "7 — plan upgrades + Suggest tab"; // bump when index.html changes
+const APP_BUILD = "8 — status bar safe area"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -468,7 +468,9 @@ function App() {
   }, [stravaOn]);
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92 }}>
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92, paddingTop: "env(safe-area-inset-top)" }}>
+      {/* dark strip behind the iPhone status bar so its white text stays readable */}
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: "env(safe-area-inset-top)", background: C.forest, zIndex: 10 }} />
       <header style={{ padding: "20px 18px 12px", maxWidth: 560, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <div style={{ fontFamily: F.display, fontWeight: 800, fontSize: 22 }}>On<span style={{ color: C.pine }}>Pace</span></div>
         <div style={{ fontSize: 13, fontWeight: 500, color: C.faint }}>
