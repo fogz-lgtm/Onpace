@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "11 — log a plan serving"; // bump when index.html changes
+const APP_BUILD = "12 — protein-aware suggestions"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -700,13 +700,17 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
 
   const remaining = targets.calories - eaten;
   const proteinLeft = Math.max(targets.protein - macros.protein, 0);
+  const proteinFocus = proteinLeft > 10;
+  const proteinLine = proteinFocus
+    ? `${proteinLeft}g protein still to hit — I'm cutting while keeping muscle, so prioritize closing the protein gap.`
+    : `my protein goal is already met (only ${proteinLeft}g to go), so do NOT prioritize protein — suggest whatever best fits the remaining calories; lighter, fresher, or simply enjoyable options are welcome.`;
   const kitchen = profile.kitchenNotes?.trim()
     ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
 
   const getSuggestions = async () => {
     setThinking(true); setError(""); setSuggestions(null);
     try {
-      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; I'm cutting while keeping muscle, so prioritize closing the protein gap. Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
+      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
       const j = parseJson(text);
       if (j && j.suggestions) setSuggestions(j.suggestions);
       else setError("Couldn't get suggestions — try again.");
@@ -718,7 +722,7 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
     if (!menuText.trim()) return;
     setThinking(true); setError(""); setMenuPicks(null);
     try {
-      const text = await askClaude(`Menu:\n${menuText}\n\nI have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; cutting while keeping muscle. Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`);
+      const text = await askClaude(`Menu:\n${menuText}\n\nI have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`);
       const j = parseJson(text);
       if (j && j.picks) setMenuPicks(j.picks);
       else setError("Couldn't rank that menu — paste it as plain text.");
@@ -735,7 +739,7 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
       const attachment = isPdf
         ? { kind: "pdf", data: await fileToBase64(file) }
         : { kind: "image", data: await fileToJpegBase64(file, 1600) };
-      const text = await askClaude(`The attached ${isPdf ? "document" : "photo"} is a menu. Read it, then: I have ~${Math.max(remaining, 0)} kcal and ${proteinLeft}g protein left today; cutting while keeping muscle. Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200, 90000, attachment);
+      const text = await askClaude(`The attached ${isPdf ? "document" : "photo"} is a menu. Read it, then: I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200, 90000, attachment);
       const j = parseJson(text);
       if (j && j.picks) setMenuPicks(j.picks);
       else setError("Couldn't read that menu — try a clearer shot, or paste it as text.");
@@ -767,7 +771,7 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
               onChange={(e) => setSuggestText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") getSuggestions(); }} />
             <div style={{ marginTop: 10 }}>
               <Btn icon="spark" onClick={getSuggestions} disabled={thinking || !aiReady} full>
-                {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinLeft}g protein left`}
+                {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinFocus ? `${proteinLeft}g protein left` : "protein goal met"}`}
               </Btn>
             </div>
             {suggestions && suggestions.map((s, i) => (
