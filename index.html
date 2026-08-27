@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "12 — protein-aware suggestions"; // bump when index.html changes
+const APP_BUILD = "13 — fresh suggestions on re-tap"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -710,10 +710,15 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
   const getSuggestions = async () => {
     setThinking(true); setError(""); setSuggestions(null);
     try {
-      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
+      const past = loadKey("suggest-history", []);
+      const avoid = past.length
+        ? `\nDo NOT suggest these recently suggested items or close variants of them — give genuinely different options: ${past.slice(-18).join("; ")}.` : "";
+      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}${avoid}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
       const j = parseJson(text);
-      if (j && j.suggestions) setSuggestions(j.suggestions);
-      else setError("Couldn't get suggestions — try again.");
+      if (j && j.suggestions) {
+        setSuggestions(j.suggestions);
+        saveKey("suggest-history", [...past, ...j.suggestions.map((s) => s.name)].slice(-30));
+      } else setError("Couldn't get suggestions — try again.");
     } catch (e) { setError(`Suggestion failed — ${e.message}`); }
     setThinking(false);
   };
