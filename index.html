@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "10 — menu photo/PDF"; // bump when index.html changes
+const APP_BUILD = "11 — log a plan serving"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -504,7 +504,7 @@ function App() {
       <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
         {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava: doStravaSync }} />}
         {tab === "suggest" && <SuggestTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }} />}
-        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs }} />}
+        {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs, log, updateLog }} />}
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
         {tab === "settings" && (
           <SettingsTab {...{ profile, updateProfile, firstRun, apiKey, updateApiKey, strava, updateStrava, stravaMsg }} done={() => { setFirstRun(false); setTab("today"); }}
@@ -830,9 +830,9 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
 }
 
 /* ============ Plan ============ */
-const DINNER_JSON = `{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num, "highlights": [2-3 very short "Label · detail" strings showing how it meets the priorities], "ingredients": [str with quantities]}`;
+const DINNER_JSON = `{"name": str, "style": "batch" or "fresh", "desc": one short sentence, "calories": per serving, "protein_g": num per serving, "carbs_g": num per serving, "fat_g": num per serving, "highlights": [2-3 very short "Label · detail" strings showing how it meets the priorities], "ingredients": [str with quantities]}`;
 
-function PlanTab({ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs }) {
+function PlanTab({ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs, log, updateLog }) {
   const [nights, setNights] = useState(4);
   const [notes, setNotes] = useState("");
   const [newTag, setNewTag] = useState("");
@@ -843,7 +843,22 @@ function PlanTab({ profile, targets, plan, updatePlan, aiReady, prefs, updatePre
   const [adjusting, setAdjusting] = useState(null);
   const [openRecipe, setOpenRecipe] = useState(null);
   const [recipeBusy, setRecipeBusy] = useState(null);
+  const [justLogged, setJustLogged] = useState(null);
   const [error, setError] = useState("");
+
+  const logServing = (idx) => {
+    const d = plan.dinners[idx];
+    updateLog({
+      ...log,
+      meals: [...log.meals, {
+        name: `${d.name} (1 serving)`, calories: Number(d.calories) || 0,
+        protein_g: Number(d.protein_g) || 0, carbs_g: Number(d.carbs_g) || 0, fat_g: Number(d.fat_g) || 0,
+        id: Date.now(),
+      }],
+    });
+    setJustLogged(idx);
+    setTimeout(() => setJustLogged((j) => (j === idx ? null : j)), 1600);
+  };
 
   const remember = (names) => {
     const h = [...loadKey("dinner-history", []), ...names].slice(-40);
@@ -1015,7 +1030,10 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[${
             {(d.highlights || [d.iron_note && `Iron · ${d.iron_note}`, d.heart_note && `Heart · ${d.heart_note}`].filter(Boolean)).map((h, k) => (
               <Pill key={k}>{h}</Pill>
             ))}
-            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <Btn small icon={justLogged === i ? "check" : "plus"} onClick={() => logServing(i)} disabled={swapping !== null || adjusting !== null}>
+                {justLogged === i ? "Logged" : "Log serving"}
+              </Btn>
               <Btn small kind="ghost" icon="sliders" onClick={() => { setAdjustOpen(adjustOpen === i ? null : i); setAdjustText(""); }}
                 disabled={swapping !== null || adjusting !== null || busy || !aiReady}>Tweak</Btn>
               <Btn small kind="ghost" icon="swap" onClick={() => swapDinner(i)} disabled={swapping !== null || adjusting !== null || busy || !aiReady}>
