@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "13 — fresh suggestions on re-tap"; // bump when index.html changes
+const APP_BUILD = "14 — remembers recent meals"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -133,6 +133,25 @@ async function stravaAccess(s, updateStrava) {
   const d = await stravaToken({ client_id: s.clientId, client_secret: s.clientSecret, grant_type: "refresh_token", refresh_token: s.refreshToken });
   updateStrava({ ...s, accessToken: d.access_token, refreshToken: d.refresh_token, expiresAt: d.expires_at });
   return d.access_token;
+}
+
+// context block so estimates can resolve "last night's dinner", "same as
+// yesterday's lunch", "leftovers of X" against known logged/planned values
+function mealMemory() {
+  const lines = [];
+  const today = new Date();
+  for (let i = 0; i <= 7 && lines.length < 30; i++) {
+    const d = new Date(today); d.setDate(today.getDate() - i);
+    const key = `log:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const lg = loadKey(key, null);
+    if (!lg || !lg.meals || !lg.meals.length) continue;
+    const label = i === 0 ? "Earlier today" : i === 1 ? "Yesterday" : `${i} days ago`;
+    lg.meals.forEach((m) => lines.push(`${label}: ${m.name} — ${Math.round(m.calories) || 0} kcal, P${Math.round(m.protein_g) || 0}/C${Math.round(m.carbs_g) || 0}/F${Math.round(m.fat_g) || 0}`));
+  }
+  const dinners = ((loadKey("plan-current", null) || {}).dinners || [])
+    .map((d) => `${d.name} — ${d.calories} kcal/serving, P${Math.round(d.protein_g) || 0}/C${Math.round(d.carbs_g) || 0}/F${Math.round(d.fat_g) || 0}`);
+  if (!lines.length && !dinners.length) return "";
+  return `\nMy recent food log, for reference when I mention a past meal (like "last night's dinner", "same as yesterday's lunch", or "leftovers of X"):\n${lines.slice(0, 30).join("\n")}${dinners.length ? `\nMy current dinner plan (per serving): ${dinners.join("; ")}` : ""}\nWhen my description refers to one of these, use its known values (scaled to the amount I state) instead of estimating from scratch, and name it accordingly.`;
 }
 
 function parseJson(text) {
@@ -567,7 +586,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     if (!mealText.trim()) return;
     setEstimating(true); setError(""); setEstimate(null);
     try {
-      const text = await askClaude(`Estimate nutrition for this meal as eaten (typical restaurant/cafeteria portions unless stated): "${mealText}".${kitchen}\nRespond ONLY with JSON: {"name": short name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`);
+      const text = await askClaude(`Estimate nutrition for this meal as eaten (typical restaurant/cafeteria portions unless stated): "${mealText}".${kitchen}${mealMemory()}\nRespond ONLY with JSON: {"name": short name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`);
       const j = parseJson(text);
       if (j && j.calories != null) setEstimate(j);
       else setError("Couldn't estimate that — try rewording it.");
