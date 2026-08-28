@@ -11,9 +11,12 @@
 <link rel="apple-touch-icon" href="icon.png" />
 <link rel="icon" href="icon.png" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<!-- the babel script + in-browser JSX compile are for editing this file directly;
+     the deploy workflow runs build.js, which pre-compiles the JSX and strips babel -->
+
 <style>
   html, body { margin: 0; padding: 0; background: #F2F1EB; }
   input:focus, textarea:focus, select:focus { border-color: #1E5A40 !important; box-shadow: 0 0 0 3px rgba(30,90,64,0.15); outline: none; }
@@ -27,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "16 — history deviation line"; // bump when index.html changes
+const APP_BUILD = "17 — offline + instant updates"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -386,7 +389,17 @@ function App() {
   const [firstRun, setFirstRun] = useState(false);
   const [date, setDate] = useState(todayKey());
   const [today, setToday] = useState(todayKey());
+  const [updateReady, setUpdateReady] = useState(false);
   const aiReady = !!apiKey.trim();
+
+  // service worker: instant cached loads; banner when a new version is fetched
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    const onMsg = (e) => { if (e.data && e.data.type === "update-ready") setUpdateReady(true); };
+    navigator.serviceWorker.addEventListener("message", onMsg);
+    return () => navigator.serviceWorker.removeEventListener("message", onMsg);
+  }, []);
 
   const goToDate = (d) => { setDate(d); setLog(loadKey(`log:${d}`, { meals: [], workouts: [] })); };
   const openDay = (d) => { goToDate(d); setTab("today"); };
@@ -521,6 +534,16 @@ function App() {
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: F.body, paddingBottom: 92, paddingTop: "env(safe-area-inset-top)" }}>
       {/* dark strip behind the iPhone status bar so its white text stays readable */}
       <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: "env(safe-area-inset-top)", background: C.forest, zIndex: 10 }} />
+      {updateReady && (
+        <div onClick={() => window.location.reload()} role="button" style={{
+          position: "fixed", top: "calc(env(safe-area-inset-top) + 10px)", left: "50%", transform: "translateX(-50%)",
+          zIndex: 50, background: C.forest, color: C.mint, padding: "9px 16px", borderRadius: 999,
+          fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", cursor: "pointer",
+          boxShadow: "0 8px 24px rgba(15,36,27,0.35)",
+        }}>
+          Update ready — tap to refresh
+        </div>
+      )}
       <header style={{ padding: "20px 18px 12px", maxWidth: 560, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <div style={{ fontFamily: F.display, fontWeight: 800, fontSize: 22 }}>On<span style={{ color: C.pine }}>Pace</span></div>
         <div style={{ fontSize: 13, fontWeight: 500, color: C.faint }}>

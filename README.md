@@ -8,8 +8,11 @@ API key you enter once on your device.
 ## How this repo hosts the app
 
 Every push to the default branch runs `.github/workflows/deploy-pages.yml`,
-which publishes the repo (`index.html` + `icon.png`) to GitHub Pages. The app
-lives at:
+which pre-compiles the app (`build.js` turns the in-page JSX into plain
+JavaScript and strips the in-browser Babel compiler) and publishes `dist/` to
+GitHub Pages. A service worker (`sw.js`) makes the installed app open
+instantly from a local copy, work offline, and show an "Update ready — tap to
+refresh" banner when a new deploy lands. The app lives at:
 
 **https://fogz-lgtm.github.io/Onpace/**
 
@@ -73,8 +76,9 @@ app.
 - **Sharing**: send anyone the URL; they get their own blank copy on their own
   device and enter their own API key. Your key and data never leave your
   device.
-- **Updating the app**: edit `index.html` in the repo; changes go live in
-  ~1 minute. If your phone shows a stale version, pull-to-refresh or reinstall
-  the home-screen icon.
+- **Updating the app**: edit `index.html` in the repo (it still carries the
+  in-browser Babel compiler, so the raw file works as-is for development);
+  changes deploy in ~1 minute, and the installed app shows an "Update ready"
+  banner on its next open.
 - **Privacy**: meal text/photos go directly from your device to Anthropic's
   API for estimation. Nothing else leaves the device.
