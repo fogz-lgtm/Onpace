@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "14 — remembers recent meals"; // bump when index.html changes
+const APP_BUILD = "15 — history + editable log"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -47,10 +47,18 @@ const F = {
   mono: "'IBM Plex Mono', ui-monospace, monospace",
 };
 
-const todayKey = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const keyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayKey = () => keyOf(new Date());
+const shiftDay = (key, delta) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return keyOf(new Date(y, m - 1, d + delta));
 };
+function dayLabel(key) {
+  if (key === todayKey()) return "Today";
+  if (key === shiftDay(todayKey(), -1)) return "Yesterday";
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
 
 const DEFAULT_PREFS = ["High protein", "Iron-rich", "Heart-smart", "One-pan"];
 
@@ -226,6 +234,7 @@ const ICONS = {
   camera: ["M4 8h3.5l2-3h5l2 3H20v11H4z", "M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"],
   swap: ["M21 5v5h-5", "M3 19v-5h5", "M4.5 9.5a8 8 0 0 1 13.6-3L21 10", "M19.5 14.5a8 8 0 0 1-13.6 3L3 14"],
   chevron: "M6 9l6 6 6-6",
+  chart: ["M4 20v-8", "M9 20V5", "M14 20v-6", "M19 20v-11", "M3 20h18"],
 };
 
 /* ============ atoms ============ */
@@ -247,8 +256,8 @@ const Btn = ({ children, onClick, kind = "solid", disabled, small, full, icon })
   </button>
 );
 
-const Card = ({ children, style }) => (
-  <section style={{
+const Card = ({ children, style, ...rest }) => (
+  <section {...rest} style={{
     background: C.surface, border: `1px solid ${C.line}`, borderRadius: 18, padding: 18, marginBottom: 14,
     boxShadow: "0 1px 3px rgba(24,32,25,0.05), 0 8px 24px -18px rgba(24,32,25,0.25)", ...style,
   }}>{children}</section>
@@ -317,7 +326,7 @@ const Contours = () => (
   </svg>
 );
 
-function Hero({ name, targets, eaten, macros, trainingCals }) {
+function Hero({ name, targets, eaten, macros, trainingCals, dayText = "Today" }) {
   const left = targets.calories - eaten;
   const over = left < 0;
   return (
@@ -330,7 +339,7 @@ function Hero({ name, targets, eaten, macros, trainingCals }) {
       <Contours />
       <div style={{ position: "relative" }}>
         <div style={{ fontFamily: F.display, fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: C.mint, marginBottom: 14 }}>
-          {name ? `${name} · today` : "Today"}
+          {name ? `${name} · ${dayText}` : dayText}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <RingSvg size={122} stroke={11} value={eaten} target={targets.calories} color={over ? C.amber : C.mint} track="rgba(255,255,255,0.14)">
@@ -376,22 +385,32 @@ function App() {
   const [stravaMsg, setStravaMsg] = useState("");
   const [firstRun, setFirstRun] = useState(false);
   const [date, setDate] = useState(todayKey());
+  const [today, setToday] = useState(todayKey());
   const aiReady = !!apiKey.trim();
 
-  // live midnight rollover
+  const goToDate = (d) => { setDate(d); setLog(loadKey(`log:${d}`, { meals: [], workouts: [] })); };
+  const openDay = (d) => { goToDate(d); setTab("today"); };
+
+  // midnight rollover; returning to the app also snaps a past-day view back to
+  // today, so a forgotten date switch can't swallow tomorrow's logging
   useEffect(() => {
     const check = () => {
       const nd = todayKey();
-      if (nd !== date) {
-        setDate(nd);
-        setLog(loadKey(`log:${nd}`, { meals: [], workouts: [] }));
+      if (nd !== today) {
+        setToday(nd);
+        if (date === today) goToDate(nd);
       }
     };
     const iv = setInterval(check, 30000);
-    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      check();
+      const nd = todayKey();
+      if (date !== nd) goToDate(nd);
+    };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
-  }, [date]);
+  }, [date, today]);
 
   useEffect(() => {
     const p = loadKey("profile", null);
@@ -521,7 +540,8 @@ function App() {
       )}
 
       <main style={{ padding: "0 16px", maxWidth: 560, margin: "0 auto" }}>
-        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava: doStravaSync }} />}
+        {tab === "today" && <TodayTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava: doStravaSync, date, today, goToDate }} />}
+        {tab === "history" && <HistoryTab {...{ profile, openDay }} />}
         {tab === "suggest" && <SuggestTab {...{ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady }} />}
         {tab === "plan" && <PlanTab {...{ profile, targets, plan, updatePlan, aiReady, prefs, updatePrefs, log, updateLog }} />}
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
@@ -540,7 +560,7 @@ function App() {
 
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.forest, borderTop: "1px solid rgba(155,220,176,0.15)", boxShadow: "0 -8px 30px rgba(15,36,27,0.25)", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div style={{ display: "flex", maxWidth: 560, margin: "0 auto" }}>
-          {[["today", "Today", "flame"], ["suggest", "Suggest", "spark"], ["plan", "Plan", "calendar"], ["library", "Library", "bookmark"], ["settings", "You", "sliders"]].map(([k, label, ic]) => {
+          {[["today", "Today", "flame"], ["suggest", "Suggest", "spark"], ["plan", "Plan", "calendar"], ["history", "History", "chart"], ["library", "Library", "bookmark"], ["settings", "You", "sliders"]].map(([k, label, ic]) => {
             const active = tab === k;
             return (
               <button key={k} onClick={() => setTab(k)} style={{
@@ -560,7 +580,45 @@ function App() {
 }
 
 /* ============ Today ============ */
-function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava }) {
+function ItemEditor({ vals, setVals, macros, onSave, onCancel }) {
+  const scale = (f) => setVals({
+    ...vals,
+    calories: Math.round((Number(vals.calories) || 0) * f),
+    ...(macros ? {
+      protein_g: Math.round((Number(vals.protein_g) || 0) * f),
+      carbs_g: Math.round((Number(vals.carbs_g) || 0) * f),
+      fat_g: Math.round((Number(vals.fat_g) || 0) * f),
+    } : {}),
+  });
+  const cell = (k, label) => (
+    <label style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.faint, marginBottom: 3 }}>{label}</div>
+      <input style={{ ...inputStyle, padding: "8px 9px", fontSize: 14 }} inputMode="numeric" value={vals[k]}
+        onChange={(e) => setVals({ ...vals, [k]: e.target.value })} />
+    </label>
+  );
+  return (
+    <div style={{ padding: "12px 0", borderTop: `1px solid ${C.line}` }}>
+      <input style={{ ...inputStyle, marginBottom: 8 }} value={vals.name} onChange={(e) => setVals({ ...vals, name: e.target.value })} />
+      <div style={{ display: "flex", gap: 6 }}>
+        {cell("calories", "kcal")}
+        {macros && cell("protein_g", "P")}
+        {macros && cell("carbs_g", "C")}
+        {macros && cell("fat_g", "F")}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
+        <Btn small kind="ghost" onClick={() => scale(0.5)}>×½</Btn>
+        <Btn small kind="ghost" onClick={() => scale(2)}>×2</Btn>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <Btn small kind="ghost" onClick={onCancel}>Cancel</Btn>
+          <Btn small onClick={onSave}>Save</Btn>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, updateLibrary, aiReady, stravaOn, syncStrava, date, today, goToDate }) {
   const [mealText, setMealText] = useState("");
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState(null);
@@ -622,9 +680,36 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
 
   const removeItem = (kind, id) => updateLog({ ...log, [kind]: log[kind].filter((x) => x.id !== id) });
 
+  const [editItem, setEditItem] = useState(null);
+  const [ev, setEv] = useState({});
+  const startEdit = (kind, item) => {
+    setEditItem({ kind, id: item.id });
+    setEv({ name: item.name, calories: item.calories, protein_g: item.protein_g || 0, carbs_g: item.carbs_g || 0, fat_g: item.fat_g || 0 });
+  };
+  const saveEdit = () => {
+    const { kind, id } = editItem;
+    updateLog({
+      ...log,
+      [kind]: log[kind].map((x) => (x.id !== id ? x : {
+        ...x, name: ev.name, calories: Number(ev.calories) || 0,
+        ...(kind === "meals" ? { protein_g: Number(ev.protein_g) || 0, carbs_g: Number(ev.carbs_g) || 0, fat_g: Number(ev.fat_g) || 0 } : {}),
+      })),
+    });
+    setEditItem(null);
+  };
+
   return (
     <div>
-      <Hero name={profile.name} targets={targets} eaten={eaten} macros={macros} trainingCals={log.workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0)} />
+      {date !== today && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, background: C.amberSoft, borderRadius: 12, padding: 8 }}>
+          <Btn small kind="ghost" onClick={() => goToDate(shiftDay(date, -1))}>‹</Btn>
+          <div style={{ flex: 1, textAlign: "center", fontWeight: 700, fontSize: 13.5, color: C.amberDeep }}>Editing {dayLabel(date)}</div>
+          <Btn small kind="ghost" onClick={() => goToDate(shiftDay(date, 1))} disabled={date >= today}>›</Btn>
+          <Btn small onClick={() => goToDate(today)}>Today</Btn>
+        </div>
+      )}
+      <Hero name={profile.name} targets={targets} eaten={eaten} macros={macros} dayText={date === today ? "Today" : dayLabel(date)}
+        trainingCals={log.workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0)} />
 
       <Card>
         <Eyebrow right={
@@ -639,17 +724,19 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
           </div>
         )}
         {trainMsg && <div style={{ fontSize: 12.5, color: C.faint, marginTop: 6 }}>{trainMsg}</div>}
-        {log.workouts.map((w) => (
+        {log.workouts.map((w) => (editItem && editItem.kind === "workouts" && editItem.id === w.id ? (
+          <ItemEditor key={w.id} vals={ev} setVals={setEv} macros={false} onSave={saveEdit} onCancel={() => setEditItem(null)} />
+        ) : (
           <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
             <span style={{ color: C.pine, display: "inline-flex" }}><Icon d={ICONS.bolt} size={17} /></span>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, cursor: "pointer" }} onClick={() => startEdit("workouts", w)} title="Tap to edit">
               <div style={{ fontWeight: 600, fontSize: 14.5 }}>{w.name}</div>
               <div style={{ fontSize: 12, color: C.faint }}>{w.duration_min ? `${w.duration_min} min · ` : ""}{w.source}</div>
             </div>
             <span style={{ fontFamily: F.mono, fontSize: 14, fontWeight: 600, color: C.pine }}>+{Math.round(w.calories)}</span>
             <button onClick={() => removeItem("workouts", w.id)} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 4 }}><Icon d={ICONS.x} size={14} /></button>
           </div>
-        ))}
+        )))}
         {manualOpen && (
           <div style={{ marginTop: 10, paddingTop: 12, borderTop: `1px solid ${C.line}`, display: "flex", gap: 8 }}>
             <input style={{ ...inputStyle, flex: 1 }} placeholder="Calories burned, e.g. 350" inputMode="numeric" value={wCal} onChange={(e) => setWCal(e.target.value)} />
@@ -695,13 +782,16 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
       <Card>
         <Eyebrow>Eaten today</Eyebrow>
         {log.meals.length === 0 && <div style={{ fontSize: 13.5, color: C.faint }}>Nothing yet — log above or tap your Library.</div>}
-        {log.meals.map((m) => (
+        {log.meals.map((m) => (editItem && editItem.kind === "meals" && editItem.id === m.id ? (
+          <ItemEditor key={m.id} vals={ev} setVals={setEv} macros onSave={saveEdit} onCancel={() => setEditItem(null)} />
+        ) : (
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
-            <div style={{ flex: 1, fontWeight: 600, fontSize: 14.5 }}>{m.name}</div>
+            <div style={{ flex: 1, fontWeight: 600, fontSize: 14.5, cursor: "pointer" }} onClick={() => startEdit("meals", m)} title="Tap to edit">{m.name}</div>
             <span style={{ fontFamily: F.mono, fontSize: 13, color: C.faint, whiteSpace: "nowrap" }}>{m.calories} · P{m.protein_g}</span>
             <button onClick={() => removeItem("meals", m.id)} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 4 }}><Icon d={ICONS.x} size={14} /></button>
           </div>
-        ))}
+        )))}
+        {log.meals.length > 0 && <div style={{ fontSize: 11.5, color: C.faint, marginTop: 8 }}>Tap an item's name to edit or resize it.</div>}
       </Card>
     </div>
   );
@@ -1135,25 +1225,128 @@ Respond ONLY with compact single-line JSON (no extra whitespace): {"dinners":[${
 
 /* ============ Library ============ */
 function LibraryTab({ library, updateLibrary, log, updateLog }) {
+  const [editId, setEditId] = useState(null);
+  const [ev, setEv] = useState({});
+  const save = () => {
+    updateLibrary(library.map((x) => (x.id !== editId ? x : {
+      ...x, name: ev.name, calories: Number(ev.calories) || 0,
+      protein_g: Number(ev.protein_g) || 0, carbs_g: Number(ev.carbs_g) || 0, fat_g: Number(ev.fat_g) || 0,
+    })));
+    setEditId(null);
+  };
   return (
     <div>
       <Card>
         <Eyebrow>Meal library</Eyebrow>
-        <div style={{ fontSize: 13.5, color: C.faint }}>Repeat meals, one-tap logging.</div>
+        <div style={{ fontSize: 13.5, color: C.faint }}>Repeat meals, one-tap logging. Tap a meal's name to edit it.</div>
       </Card>
       {library.length === 0 && (
         <div style={{ fontSize: 13.5, color: C.faint, textAlign: "center", padding: 18, lineHeight: 1.5 }}>
           Estimate a meal on Today, then "Log + save to Library."
         </div>
       )}
-      {library.map((m) => (
+      {library.map((m) => (editId === m.id ? (
+        <Card key={m.id} style={{ padding: "2px 14px 14px" }}>
+          <ItemEditor vals={ev} setVals={setEv} macros onSave={save} onCancel={() => setEditId(null)} />
+        </Card>
+      ) : (
         <Card key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 14 }}>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, cursor: "pointer" }} title="Tap to edit"
+            onClick={() => { setEditId(m.id); setEv({ name: m.name, calories: m.calories, protein_g: m.protein_g || 0, carbs_g: m.carbs_g || 0, fat_g: m.fat_g || 0 }); }}>
             <div style={{ fontWeight: 700, fontSize: 14.5 }}>{m.name}</div>
             <div style={{ fontFamily: F.mono, fontSize: 12, color: C.faint, marginTop: 2 }}>{m.calories} kcal · P {m.protein_g} · C {m.carbs_g} · F {m.fat_g}</div>
           </div>
           <Btn small onClick={() => updateLog({ ...log, meals: [...log.meals, { ...m, id: Date.now() }] })}>Log</Btn>
           <button onClick={() => updateLibrary(library.filter((x) => x.id !== m.id))} style={{ border: "none", background: "none", color: C.faint, cursor: "pointer", padding: 6 }}><Icon d={ICONS.x} size={15} /></button>
+        </Card>
+      )))}
+    </div>
+  );
+}
+
+/* ============ History ============ */
+function HistoryTab({ profile, openDay }) {
+  const days = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < 30; i++) {
+      const key = shiftDay(todayKey(), -i);
+      const lg = loadKey(`log:${key}`, null);
+      const meals = (lg && lg.meals) || [];
+      const workouts = (lg && lg.workouts) || [];
+      if (!meals.length && !workouts.length) { out.push({ key, empty: true }); continue; }
+      const wc = workouts.reduce((s, w) => s + (Number(w.calories) || 0), 0);
+      const t = computeTargets(profile, wc);
+      out.push({
+        key,
+        eaten: meals.reduce((s, m) => s + (Number(m.calories) || 0), 0),
+        protein: meals.reduce((s, m) => s + (Number(m.protein_g) || 0), 0),
+        wc, calTarget: t.calories, proteinTarget: t.protein,
+      });
+    }
+    return out;
+  }, [profile]);
+
+  const chart = days.slice(0, 14).reverse();
+  const logged = days.filter((d) => !d.empty);
+  const maxY = Math.max(...chart.map((d) => (d.empty ? 0 : Math.max(d.eaten, d.calTarget))), 1) * 1.08;
+  const W = 340, H = 120;
+  const bw = W / 14;
+  const y = (v) => H - (v / maxY) * H;
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Last 14 days</Eyebrow>
+        <svg viewBox={`0 0 ${W} ${H + 18}`} width="100%" role="img" aria-label="Daily calories eaten versus target over the last 14 days">
+          {chart.map((d, i) => {
+            const x = i * bw + 4;
+            const w = bw - 8;
+            if (d.empty) return <rect key={d.key} x={x} y={H - 2} width={w} height={2} rx={1} fill={C.line} />;
+            const over = d.eaten > d.calTarget;
+            return (
+              <g key={d.key} onClick={() => openDay(d.key)} style={{ cursor: "pointer" }}>
+                <title>{`${dayLabel(d.key)}: ${Math.round(d.eaten)} / ${d.calTarget} kcal`}</title>
+                <rect x={x} y={Math.min(y(d.eaten), H - 2)} width={w} height={Math.max(H - y(d.eaten), 2)} rx={2}
+                  fill={over ? C.amberDeep : C.pine} opacity={0.9} />
+                <line x1={x - 1.5} x2={x + w + 1.5} y1={y(d.calTarget)} y2={y(d.calTarget)} stroke={C.ink} strokeWidth={1.4} opacity={0.55} />
+              </g>
+            );
+          })}
+          <line x1={0} x2={W} y1={H} y2={H} stroke={C.line} strokeWidth={1} />
+          {chart.map((d, i) => {
+            const [yy, mm, dd] = d.key.split("-").map(Number);
+            return (
+              <text key={d.key} x={i * bw + bw / 2} y={H + 13} textAnchor="middle" fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">
+                {"SMTWTFS"[new Date(yy, mm - 1, dd).getDay()]}
+              </text>
+            );
+          })}
+        </svg>
+        <div style={{ fontSize: 11.5, color: C.faint, marginTop: 6, lineHeight: 1.5 }}>
+          Bar = eaten · tick = that day's target · <span style={{ color: C.amberDeep, fontWeight: 700 }}>amber</span> = over.
+          Tap a bar, or a day below, to view or edit it.
+        </div>
+      </Card>
+
+      {logged.length === 0 && (
+        <div style={{ fontSize: 13.5, color: C.faint, textAlign: "center", padding: 18 }}>Nothing logged yet — days appear here as you log.</div>
+      )}
+      {logged.map((d) => (
+        <Card key={d.key} style={{ padding: 14, cursor: "pointer" }} onClick={() => openDay(d.key)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>{dayLabel(d.key)}</div>
+              <div style={{ fontSize: 12, color: C.faint, marginTop: 2 }}>
+                P {Math.round(d.protein)}/{d.proteinTarget}
+                {d.wc > 0 ? ` · +${Math.round(d.wc)} training` : ""}
+                {d.eaten > d.calTarget ? " · over target" : ""}
+              </div>
+            </div>
+            <span style={{ fontFamily: F.mono, fontSize: 13.5, fontWeight: 600, color: d.eaten > d.calTarget ? C.amberDeep : C.pine }}>
+              {Math.round(d.eaten)} / {d.calTarget}
+            </span>
+            <span style={{ color: C.faint, display: "inline-flex", transform: "rotate(-90deg)" }}><Icon d={ICONS.chevron} size={15} /></span>
+          </div>
         </Card>
       ))}
     </div>
