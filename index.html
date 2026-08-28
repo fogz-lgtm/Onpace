@@ -27,7 +27,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "15 — history + editable log"; // bump when index.html changes
+const APP_BUILD = "16 — history deviation line"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -1288,43 +1288,59 @@ function HistoryTab({ profile, openDay }) {
 
   const chart = days.slice(0, 14).reverse();
   const logged = days.filter((d) => !d.empty);
-  const maxY = Math.max(...chart.map((d) => (d.empty ? 0 : Math.max(d.eaten, d.calTarget))), 1) * 1.08;
-  const W = 340, H = 120;
+  const devs = chart.map((d) => (d.empty ? null : d.eaten - d.calTarget));
+  const rawMax = Math.max(...devs.filter((v) => v !== null).map(Math.abs), 100);
+  const maxAbs = Math.ceil((rawMax * 1.15) / 50) * 50;
+  const W = 340, H = 130;
+  const mid = H / 2;
   const bw = W / 14;
-  const y = (v) => H - (v / maxY) * H;
+  const xc = (i) => i * bw + bw / 2;
+  const y = (v) => mid - (v / maxAbs) * (mid - 10);
+  const segs = [];
+  {
+    let run = [];
+    devs.forEach((v, i) => {
+      if (v === null) { if (run.length > 1) segs.push(run); run = []; }
+      else run.push(`${xc(i)},${y(v)}`);
+    });
+    if (run.length > 1) segs.push(run);
+  }
 
   return (
     <div>
       <Card>
         <Eyebrow>Last 14 days</Eyebrow>
-        <svg viewBox={`0 0 ${W} ${H + 18}`} width="100%" role="img" aria-label="Daily calories eaten versus target over the last 14 days">
+        <svg viewBox={`0 0 ${W} ${H + 18}`} width="100%" role="img" aria-label="Calories over or under target per day, last 14 days">
+          <line x1={0} x2={W} y1={mid} y2={mid} stroke={C.ink} strokeWidth={1.3} opacity={0.5} />
+          <text x={2} y={mid - 4} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">0</text>
+          <text x={2} y={12} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">+{maxAbs}</text>
+          <text x={2} y={H - 3} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">−{maxAbs}</text>
+          {segs.map((s, k) => (
+            <polyline key={k} points={s.join(" ")} fill="none" stroke={C.ink} strokeWidth={2} opacity={0.3} strokeLinejoin="round" strokeLinecap="round" />
+          ))}
           {chart.map((d, i) => {
-            const x = i * bw + 4;
-            const w = bw - 8;
-            if (d.empty) return <rect key={d.key} x={x} y={H - 2} width={w} height={2} rx={1} fill={C.line} />;
-            const over = d.eaten > d.calTarget;
+            if (d.empty) return null;
+            const v = d.eaten - d.calTarget;
+            const over = v > 0;
             return (
               <g key={d.key} onClick={() => openDay(d.key)} style={{ cursor: "pointer" }}>
-                <title>{`${dayLabel(d.key)}: ${Math.round(d.eaten)} / ${d.calTarget} kcal`}</title>
-                <rect x={x} y={Math.min(y(d.eaten), H - 2)} width={w} height={Math.max(H - y(d.eaten), 2)} rx={2}
-                  fill={over ? C.amberDeep : C.pine} opacity={0.9} />
-                <line x1={x - 1.5} x2={x + w + 1.5} y1={y(d.calTarget)} y2={y(d.calTarget)} stroke={C.ink} strokeWidth={1.4} opacity={0.55} />
+                <title>{`${dayLabel(d.key)}: ${over ? "+" : ""}${Math.round(v)} kcal vs target (${Math.round(d.eaten)} / ${d.calTarget})`}</title>
+                <circle cx={xc(i)} cy={y(v)} r={4.5} fill={over ? C.amberDeep : C.pine} stroke="#FFF" strokeWidth={1.5} />
               </g>
             );
           })}
-          <line x1={0} x2={W} y1={H} y2={H} stroke={C.line} strokeWidth={1} />
           {chart.map((d, i) => {
             const [yy, mm, dd] = d.key.split("-").map(Number);
             return (
-              <text key={d.key} x={i * bw + bw / 2} y={H + 13} textAnchor="middle" fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">
+              <text key={d.key} x={xc(i)} y={H + 13} textAnchor="middle" fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">
                 {"SMTWTFS"[new Date(yy, mm - 1, dd).getDay()]}
               </text>
             );
           })}
         </svg>
         <div style={{ fontSize: 11.5, color: C.faint, marginTop: 6, lineHeight: 1.5 }}>
-          Bar = eaten · tick = that day's target · <span style={{ color: C.amberDeep, fontWeight: 700 }}>amber</span> = over.
-          Tap a bar, or a day below, to view or edit it.
+          Calories vs. that day's target — dots above the 0 line are <span style={{ color: C.amberDeep, fontWeight: 700 }}>over</span>,
+          below are under. Tap a dot, or a day below, to view or edit it.
         </div>
       </Card>
 
