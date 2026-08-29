@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "17 — offline + instant updates"; // bump when index.html changes
+const APP_BUILD = "18 — suggest recipes + barcode scan"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -238,7 +238,23 @@ const ICONS = {
   swap: ["M21 5v5h-5", "M3 19v-5h5", "M4.5 9.5a8 8 0 0 1 13.6-3L21 10", "M19.5 14.5a8 8 0 0 1-13.6 3L3 14"],
   chevron: "M6 9l6 6 6-6",
   chart: ["M4 20v-8", "M9 20V5", "M14 20v-6", "M19 20v-11", "M3 20h18"],
+  barcode: ["M3 6v12", "M7 6v12", "M10 6v8", "M13 6v12", "M17 6v8", "M21 6v12"],
 };
+
+// lazy script loader (the barcode library only loads when the scanner opens)
+const loadedScripts = {};
+function loadScript(src) {
+  if (!loadedScripts[src]) {
+    loadedScripts[src] = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => { delete loadedScripts[src]; reject(new Error("couldn't load the scanner")); };
+      document.head.appendChild(s);
+    });
+  }
+  return loadedScripts[src];
+}
 
 /* ============ atoms ============ */
 const Btn = ({ children, onClick, kind = "solid", disabled, small, full, icon }) => (
@@ -603,6 +619,44 @@ function App() {
 }
 
 /* ============ Today ============ */
+function BarcodeScanner({ onCode, onClose }) {
+  const videoRef = useRef(null);
+  const readerRef = useRef(null);
+  const [err, setErr] = useState("");
+  const [manual, setManual] = useState("");
+  useEffect(() => {
+    let done = false;
+    (async () => {
+      try {
+        await loadScript("vendor/zxing.min.js");
+        if (done) return;
+        const reader = new window.ZXing.BrowserMultiFormatReader();
+        readerRef.current = reader;
+        await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } } },
+          videoRef.current,
+          (result) => {
+            if (result && !done) { done = true; try { reader.reset(); } catch (e) {} onCode(result.getText()); }
+          }
+        );
+      } catch (e) { setErr("Camera unavailable — type the barcode number below instead."); }
+    })();
+    return () => { done = true; try { readerRef.current && readerRef.current.reset(); } catch (e) {} };
+  }, []);
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(15,36,27,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, gap: 14 }}>
+      <video ref={videoRef} playsInline muted autoPlay style={{ width: "100%", maxWidth: 420, borderRadius: 16, background: "#000", aspectRatio: "4/3", objectFit: "cover" }} />
+      <div style={{ color: C.mint, fontSize: 13.5, fontWeight: 600, textAlign: "center" }}>{err || "Point the camera at the barcode"}</div>
+      <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 420 }}>
+        <input style={{ ...inputStyle, flex: 1 }} inputMode="numeric" placeholder="…or type the barcode number" value={manual}
+          onChange={(e) => setManual(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && manual.trim()) onCode(manual.trim()); }} />
+        <Btn small onClick={() => onCode(manual.trim())} disabled={!manual.trim()}>Look up</Btn>
+      </div>
+      <Btn onClick={onClose}>Cancel</Btn>
+    </div>
+  );
+}
+
 function ItemEditor({ vals, setVals, macros, onSave, onCancel }) {
   const scale = (f) => setVals({
     ...vals,
@@ -685,6 +739,28 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
       if (j && j.calories != null) setEstimate(j);
       else setError("Couldn't read that photo — try a clearer shot.");
     } catch (e) { setError(`Photo estimate failed — ${e.message}`); }
+    setEstimating(false);
+  };
+
+  const [scanOpen, setScanOpen] = useState(false);
+  const lookupBarcode = async (code) => {
+    setScanOpen(false); setEstimating(true); setError(""); setEstimate(null);
+    try {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=product_name,brands,serving_size,nutriments`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status !== 1 || !data.product) throw new Error("product not in Open Food Facts — try snapping the nutrition label instead");
+      const p = data.product;
+      const n = p.nutriments || {};
+      const perServing = n["energy-kcal_serving"] != null;
+      const pick = (k) => Math.round(Number(perServing ? n[`${k}_serving`] : n[`${k}_100g`]) || 0);
+      const suffix = perServing ? ` (1 serving${p.serving_size ? `, ${p.serving_size}` : ""})` : " (per 100 g)";
+      const est = {
+        name: `${p.product_name || "Scanned item"}${p.brands ? ` — ${p.brands.split(",")[0].trim()}` : ""}${suffix}`,
+        calories: pick("energy-kcal"), protein_g: pick("proteins"), carbs_g: pick("carbohydrates"), fat_g: pick("fat"),
+      };
+      if (!est.calories) throw new Error("no calorie data for this product — snap the nutrition label instead");
+      setEstimate(est);
+    } catch (e) { setError(`Barcode lookup failed — ${e.message}`); }
     setEstimating(false);
   };
 
@@ -783,8 +859,12 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
                 <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={estimating || !aiReady}
                   onChange={(e) => { estimatePhoto(e.target.files && e.target.files[0]); e.target.value = ""; }} />
               </label>
+              <button onClick={() => setScanOpen(true)} disabled={estimating} title="Scan a barcode" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, background: "transparent", color: C.pine, opacity: estimating ? 0.45 : 1 }}>
+                <Icon d={ICONS.barcode} size={20} />
+              </button>
             </div>
-            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Type it, or snap a photo of the plate or the nutrition label.</div>
+            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Type it, snap a photo of the plate or label, or scan a barcode.</div>
+            {scanOpen && <BarcodeScanner onCode={lookupBarcode} onClose={() => setScanOpen(false)} />}
             {estimate && (
               <div style={{ marginTop: 12, padding: 14, background: C.pineSoft, borderRadius: 14 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{estimate.name}</div>
@@ -884,8 +964,48 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
     setThinking(false);
   };
 
+  const [openRec, setOpenRec] = useState(null);
+  const [recBusy, setRecBusy] = useState(null);
+  const [tweakOpen, setTweakOpen] = useState(null);
+  const [tweakText, setTweakText] = useState("");
+  const [tweaking, setTweaking] = useState(null);
+
+  const toggleRecipe = async (i) => {
+    if (openRec === i) { setOpenRec(null); return; }
+    setOpenRec(i);
+    const s = suggestions[i];
+    if (s.recipe) return;
+    setRecBusy(i); setError("");
+    try {
+      const text = await askClaude(`Write a concise single-serving recipe for "${s.name}" — ${s.desc}. Land close to ${s.calories} kcal, ${s.protein_g}g protein, ${s.carbs_g}g carbs, ${s.fat_g}g fat.${kitchen}\nRespond ONLY with compact JSON: {"time_min": total number, "ingredients": [str with quantities], "steps": [max 6 short imperative steps]}. No other text.`, 1500);
+      const j = parseJson(text);
+      if (j && j.steps) setSuggestions((cur) => cur.map((x, k) => (k === i ? { ...x, recipe: j } : x)));
+      else setError("Couldn't load that recipe — tap the name again to retry.");
+    } catch (e) { setError(`Recipe load failed — ${e.message}`); }
+    setRecBusy(null);
+  };
+
+  const tweakSuggestion = async (i) => {
+    const change = tweakText.trim();
+    if (!change) return;
+    setTweaking(i); setError("");
+    const s = suggestions[i];
+    try {
+      const text = await askClaude(`Revise this food suggestion: ${JSON.stringify({ name: s.name, desc: s.desc, calories: s.calories, protein_g: s.protein_g, carbs_g: s.carbs_g, fat_g: s.fat_g })}.
+Requested change: "${change}". Keep it as close to the original as makes sense, at similar calories unless the change implies otherwise.${kitchen}
+Respond ONLY with compact JSON: {"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`, 1000);
+      const j = parseJson(text);
+      if (j && j.calories != null) {
+        setSuggestions((cur) => cur.map((x, k) => (k === i ? j : x)));
+        saveKey("suggest-history", [...loadKey("suggest-history", []), j.name].slice(-30));
+        setTweakOpen(null); setTweakText("");
+      } else setError("Couldn't apply that change — try rewording it.");
+    } catch (e) { setError(`Tweak failed — ${e.message}`); }
+    setTweaking(null);
+  };
+
   const seg = (key, label) => (
-    <button onClick={() => { setMode(key); setError(""); setSuggestions(null); setMenuPicks(null); }} style={{
+    <button onClick={() => { setMode(key); setError(""); setSuggestions(null); setMenuPicks(null); setOpenRec(null); setTweakOpen(null); }} style={{
       flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
       background: mode === key ? C.surface : "transparent",
       color: mode === key ? C.ink : C.faint,
@@ -911,19 +1031,52 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
                 {thinking ? "Thinking…" : `Suggest for ${Math.max(remaining, 0)} kcal · ${proteinFocus ? `${proteinLeft}g protein left` : "protein goal met"}`}
               </Btn>
             </div>
-            {suggestions && suggestions.map((s, i) => (
-              <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
-                <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
-                <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...s, id: Date.now() }])}>Save</Btn>
-                    <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...s, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
+            {suggestions && suggestions.map((s, i) => {
+              const plain = { name: s.name, calories: s.calories, protein_g: s.protein_g, carbs_g: s.carbs_g, fat_g: s.fat_g };
+              return (
+                <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}`, opacity: tweaking === i ? 0.55 : 1 }}>
+                  <div onClick={() => toggleRecipe(i)} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }} title="Tap for the recipe">
+                    <div style={{ fontWeight: 700, fontSize: 14.5 }}>{s.name}</div>
+                    <span style={{ color: C.faint, display: "inline-flex", transform: openRec === i ? "rotate(180deg)" : "none" }}><Icon d={ICONS.chevron} size={15} /></span>
                   </div>
+                  <div style={{ fontSize: 13, color: C.faint, margin: "3px 0 8px" }}>{s.desc}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: F.mono, fontSize: 13, fontWeight: 600, color: C.pine }}>{s.calories} kcal · P {s.protein_g}</span>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <Btn small kind="ghost" icon="sliders" onClick={() => { setTweakOpen(tweakOpen === i ? null : i); setTweakText(""); }} disabled={tweaking !== null}>Tweak</Btn>
+                      <Btn small kind="ghost" onClick={() => updateLibrary([...library, { ...plain, id: Date.now() }])}>Save</Btn>
+                      <Btn small onClick={() => { updateLog({ ...log, meals: [...log.meals, { ...plain, id: Date.now() }] }); setSuggestions(null); }}>Log it</Btn>
+                    </div>
+                  </div>
+                  {tweakOpen === i && (
+                    <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                      <input style={{ ...inputStyle, flex: 1 }} placeholder={'"No yogurt", "make it savory"…'} value={tweakText}
+                        onChange={(e) => setTweakText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") tweakSuggestion(i); }} />
+                      <Btn small onClick={() => tweakSuggestion(i)} disabled={!tweakText.trim() || tweaking !== null}>{tweaking === i ? "Fixing…" : "Apply"}</Btn>
+                    </div>
+                  )}
+                  {openRec === i && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+                      {recBusy === i && <div style={{ fontSize: 13, color: C.faint }}>Loading recipe…</div>}
+                      {s.recipe && (
+                        <React.Fragment>
+                          <div style={{ fontFamily: F.mono, fontSize: 12.5, color: C.faint, marginBottom: 8 }}>{s.recipe.time_min} min · 1 serving</div>
+                          <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 5 }}>Ingredients</div>
+                          <div style={{ fontSize: 13.5, lineHeight: 1.7, marginBottom: 10 }}>{(s.recipe.ingredients || []).join(" · ")}</div>
+                          <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: C.faint, marginBottom: 5 }}>Steps</div>
+                          {s.recipe.steps.map((st, k) => (
+                            <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0", fontSize: 13.5, lineHeight: 1.5 }}>
+                              <span style={{ fontFamily: F.mono, fontWeight: 600, color: C.pine, flexShrink: 0 }}>{k + 1}</span>
+                              <span>{st}</span>
+                            </div>
+                          ))}
+                        </React.Fragment>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </React.Fragment>
         )}
 

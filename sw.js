@@ -1,8 +1,8 @@
 // OnPace service worker — instant cached loads, offline support, and an
 // "update ready" signal to open pages when a newer index.html is fetched.
-const SHELL = "onpace-shell-v1";
+const SHELL = "onpace-shell-v2";
 const RUNTIME = "onpace-runtime-v1";
-const SHELL_FILES = ["./", "./index.html", "./icon.png", "./vendor/react.production.min.js", "./vendor/react-dom.production.min.js"];
+const SHELL_FILES = ["./", "./index.html", "./icon.png", "./vendor/react.production.min.js", "./vendor/react-dom.production.min.js", "./vendor/zxing.min.js"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
