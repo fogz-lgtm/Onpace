@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "18 — suggest recipes + barcode scan"; // bump when index.html changes
+const APP_BUILD = "19 — photo commentary"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -734,7 +734,8 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     setEstimating(true); setError(""); setEstimate(null);
     try {
       const b64 = await fileToJpegBase64(file);
-      const text = await askClaude(`This photo shows either a meal/food or a nutrition facts label. If it's a meal, estimate the nutrition for the visible portion as served. If it's a nutrition label, read it and report values for one typical serving (note the serving in the name).${kitchen}\nRespond ONLY with JSON: {"name": short descriptive name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`, 1000, 60000, { kind: "image", data: b64 });
+      const note = mealText.trim();
+      const text = await askClaude(`This photo shows either a meal/food or a nutrition facts label.${note ? ` My note about this photo: "${note}" — trust this note over visual guesses wherever they conflict (portions, ingredients, what's actually mine).` : ""} If it's a meal, estimate the nutrition for the portion I'm eating as served. If it's a nutrition label, read it and report values for one typical serving (note the serving in the name).${kitchen}\nRespond ONLY with JSON: {"name": short descriptive name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`, 1000, 60000, { kind: "image", data: b64 });
       const j = parseJson(text);
       if (j && j.calories != null) setEstimate(j);
       else setError("Couldn't read that photo — try a clearer shot.");
@@ -863,7 +864,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
                 <Icon d={ICONS.barcode} size={20} />
               </button>
             </div>
-            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Type it, snap a photo of the plate or label, or scan a barcode.</div>
+            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Type it, snap a photo, or scan a barcode. Text typed above rides along with a photo as a note — "half is mine", "that's oat milk".</div>
             {scanOpen && <BarcodeScanner onCode={lookupBarcode} onClose={() => setScanOpen(false)} />}
             {estimate && (
               <div style={{ marginTop: 12, padding: 14, background: C.pineSoft, borderRadius: 14 }}>
@@ -956,7 +957,8 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
       const attachment = isPdf
         ? { kind: "pdf", data: await fileToBase64(file) }
         : { kind: "image", data: await fileToJpegBase64(file, 1600) };
-      const text = await askClaude(`The attached ${isPdf ? "document" : "photo"} is a menu. Read it, then: I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200, 90000, attachment);
+      const note = menuText.trim();
+      const text = await askClaude(`The attached ${isPdf ? "document" : "photo"} is a menu.${note ? ` My note: "${note}" — apply it when reading the menu and ranking.` : ""} Read it, then: I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Rank the 3 best options.${kitchen}\nRespond ONLY with JSON: {"picks":[{"item": name, "why": very short phrase, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200, 90000, attachment);
       const j = parseJson(text);
       if (j && j.picks) setMenuPicks(j.picks);
       else setError("Couldn't read that menu — try a clearer shot, or paste it as text.");
@@ -1095,7 +1097,7 @@ Respond ONLY with compact JSON: {"name": short name, "desc": very short how-to o
                   onChange={(e) => { analyzeMenuFile(e.target.files && e.target.files[0]); e.target.value = ""; }} />
               </label>
             </div>
-            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Paste it as text, or snap/upload a photo, screenshot, or PDF of the menu.</div>
+            <div style={{ marginTop: 7, fontSize: 12, color: C.faint }}>Paste it as text, or snap/upload a photo, screenshot, or PDF. Text typed above rides along with an upload as a note — "no seafood", "only the lunch section".</div>
             {menuPicks && menuPicks.map((p, i) => (
               <div key={i} style={{ marginTop: 10, padding: 13, borderRadius: 14, background: i === 0 ? C.pineSoft : "#FBFBF8", border: i === 0 ? "none" : `1px solid ${C.line}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
