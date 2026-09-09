@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "22 — meal requests get real variety"; // bump when index.html changes
+const APP_BUILD = "23 — snacks can be simple combos"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -932,7 +932,7 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
 Rules — first classify my request, then answer it exactly as asked:
 (a) I named specific foods → portioning mode: every option contains ONLY those foods with exact amounts ("18 almonds + 15 peanuts", "1/4 cup each"), as three sizes or mixes (lighter / standard / fuller vs my budget). NEVER add other foods, sides, drinks, or protein sources I didn't mention.
 (b) I asked for a meal (breakfast, lunch, dinner, or similar) → three genuinely DIFFERENT real meals — different dishes, cuisines, or main ingredients, each a normal single dish a person would actually make or order (a sandwich, a bowl, a salad, a plate), sized to my budget. Don't stack extra sides or add-ons to force macros.
-(c) Otherwise (snack or open-ended) → three different simple options, each one thing, minimal prep with common ingredients unless the request implies cooking.
+(c) Otherwise (snack or open-ended) → three different simple options. Small, easy, and made from common household staples — a single item or an easy pairing (apple + peanut butter, crackers + cheese) both count; no cooking or obscure ingredients unless the request implies it.
 Except in portioning mode, the three options must be genuinely different from each other — never three sizes, styles, or variants of the same item.
 Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${avoid}
 Respond ONLY with compact JSON: {"suggestions":[{"name": short name with the amount, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
