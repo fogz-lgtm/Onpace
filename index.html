@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "21 — on-pace, not protein-max"; // bump when index.html changes
+const APP_BUILD = "22 — meal requests get real variety"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -929,10 +929,12 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
       const avoid = past.length
         ? `\n- Unless my request names the foods itself, do NOT suggest these recently suggested items or close variants — give genuinely different options: ${past.slice(-18).join("; ")}.` : "";
       const text = await askClaude(`My request: "${suggestText.trim() || "a snack"}".
-Rules — in priority order:
-- Answer the request exactly as asked. If I name specific foods, every option must contain ONLY those foods: your job is portioning, not recipe-building — give exact amounts ("18 almonds + 15 peanuts", "1/4 cup each") as three different sizes or mixes (lighter / standard / fuller vs my budget). NEVER add other foods, sides, drinks, or protein sources I didn't mention.
-- If I didn't name foods, keep each option one simple thing, not a combo plate. Prefer minimal-prep, common-ingredient options unless the request implies cooking.
-- Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${avoid}
+Rules — first classify my request, then answer it exactly as asked:
+(a) I named specific foods → portioning mode: every option contains ONLY those foods with exact amounts ("18 almonds + 15 peanuts", "1/4 cup each"), as three sizes or mixes (lighter / standard / fuller vs my budget). NEVER add other foods, sides, drinks, or protein sources I didn't mention.
+(b) I asked for a meal (breakfast, lunch, dinner, or similar) → three genuinely DIFFERENT real meals — different dishes, cuisines, or main ingredients, each a normal single dish a person would actually make or order (a sandwich, a bowl, a salad, a plate), sized to my budget. Don't stack extra sides or add-ons to force macros.
+(c) Otherwise (snack or open-ended) → three different simple options, each one thing, minimal prep with common ingredients unless the request implies cooking.
+Except in portioning mode, the three options must be genuinely different from each other — never three sizes, styles, or variants of the same item.
+Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${avoid}
 Respond ONLY with compact JSON: {"suggestions":[{"name": short name with the amount, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
       const j = parseJson(text);
       if (j && j.suggestions) {
