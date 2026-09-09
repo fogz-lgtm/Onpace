@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "19 — photo commentary"; // bump when index.html changes
+const APP_BUILD = "20 — suggest answers the actual request"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -915,8 +915,8 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
   const proteinLeft = Math.max(targets.protein - macros.protein, 0);
   const proteinFocus = proteinLeft > 10;
   const proteinLine = proteinFocus
-    ? `${proteinLeft}g protein still to hit — I'm cutting while keeping muscle, so prioritize closing the protein gap.`
-    : `my protein goal is already met (only ${proteinLeft}g to go), so do NOT prioritize protein — suggest whatever best fits the remaining calories; lighter, fresher, or simply enjoyable options are welcome.`;
+    ? `${proteinLeft}g protein still to hit — favor protein where it fits the request naturally, but NEVER bolt extra foods onto my request to chase it.`
+    : `my protein goal is already met (only ${proteinLeft}g to go), so do NOT prioritize protein — whatever best fits the remaining calories is ideal.`;
   const kitchen = profile.kitchenNotes?.trim()
     ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
 
@@ -925,8 +925,13 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
     try {
       const past = loadKey("suggest-history", []);
       const avoid = past.length
-        ? `\nDo NOT suggest these recently suggested items or close variants of them — give genuinely different options: ${past.slice(-18).join("; ")}.` : "";
-      const text = await askClaude(`Request: ${suggestText.trim() || "a snack"}. I have ~${Math.max(remaining, 0)} kcal left today and ${proteinLine} Suggest 3 options sized to fit my remaining budget. Prefer minimal-prep, common-ingredient options unless the request implies cooking.${kitchen}${avoid}\nRespond ONLY with compact JSON: {"suggestions":[{"name": short name, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
+        ? `\n- Unless my request names the foods itself, do NOT suggest these recently suggested items or close variants — give genuinely different options: ${past.slice(-18).join("; ")}.` : "";
+      const text = await askClaude(`My request: "${suggestText.trim() || "a snack"}".
+Rules — in priority order:
+- Answer the request exactly as asked. If I name specific foods, every option must contain ONLY those foods: your job is portioning, not recipe-building — give exact amounts ("18 almonds + 15 peanuts", "1/4 cup each") as three different sizes or mixes (lighter / standard / fuller vs my budget). NEVER add other foods, sides, drinks, or protein sources I didn't mention.
+- If I didn't name foods, keep each option one simple thing, not a combo plate. Prefer minimal-prep, common-ingredient options unless the request implies cooking.
+- Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${avoid}
+Respond ONLY with compact JSON: {"suggestions":[{"name": short name with the amount, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
       const j = parseJson(text);
       if (j && j.suggestions) {
         setSuggestions(j.suggestions);
