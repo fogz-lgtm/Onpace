@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "20 — suggest answers the actual request"; // bump when index.html changes
+const APP_BUILD = "21 — on-pace, not protein-max"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -914,8 +914,10 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
   const remaining = targets.calories - eaten;
   const proteinLeft = Math.max(targets.protein - macros.protein, 0);
   const proteinFocus = proteinLeft > 10;
+  const kcalLeft = Math.max(remaining, 0);
+  const paceRatio = kcalLeft > 0 ? Math.round((proteinLeft / kcalLeft) * 100) : 0;
   const proteinLine = proteinFocus
-    ? `${proteinLeft}g protein still to hit — favor protein where it fits the request naturally, but NEVER bolt extra foods onto my request to chase it.`
+    ? `${proteinLeft}g protein left today. The goal is to keep me ON PACE, not to maximize protein: a good option carries roughly its proportional share of the remaining protein (~${paceRatio}g per 100 kcal). Fitting the calories matters more than beating that ratio — an ordinary snack that keeps the day on track beats a protein-maxed one, and NEVER bolt extra foods onto my request to chase protein.`
     : `my protein goal is already met (only ${proteinLeft}g to go), so do NOT prioritize protein — whatever best fits the remaining calories is ideal.`;
   const kitchen = profile.kitchenNotes?.trim()
     ? `\nStanding kitchen facts — always apply these when relevant: ${profile.kitchenNotes.trim()}` : "";
