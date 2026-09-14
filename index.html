@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "23 — snacks can be simple combos"; // bump when index.html changes
+const APP_BUILD = "24 — learns your pantry"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -144,6 +144,28 @@ async function stravaAccess(s, updateStrava) {
   const d = await stravaToken({ client_id: s.clientId, client_secret: s.clientSecret, grant_type: "refresh_token", refresh_token: s.refreshToken });
   updateStrava({ ...s, accessToken: d.access_token, refreshToken: d.refresh_token, expiresAt: d.expires_at });
   return d.access_token;
+}
+
+/* ============ learned pantry — what the log implies is usually on hand ============ */
+function learnPantry(items) {
+  if (!items || !items.length) return;
+  const p = loadKey("pantry", {});
+  const now = Date.now();
+  items.forEach((raw) => {
+    const k = String(raw).toLowerCase().trim().slice(0, 40);
+    if (k.length < 3) return;
+    p[k] = { n: ((p[k] && p[k].n) || 0) + 1, last: now };
+  });
+  saveKey("pantry", p);
+}
+function pantryList(max = 30) {
+  const p = loadKey("pantry", {});
+  const cutoff = Date.now() - 60 * 24 * 3600 * 1000; // fade out after ~60 days unseen
+  return Object.entries(p)
+    .filter(([, v]) => v.last > cutoff)
+    .sort((a, b) => b[1].n - a[1].n || b[1].last - a[1].last)
+    .slice(0, max)
+    .map(([k]) => k);
 }
 
 // context block so estimates can resolve "last night's dinner", "same as
@@ -586,13 +608,14 @@ function App() {
         {tab === "library" && <LibraryTab {...{ library, updateLibrary, log, updateLog }} />}
         {tab === "settings" && (
           <SettingsTab {...{ profile, updateProfile, firstRun, apiKey, updateApiKey, strava, updateStrava, stravaMsg }} done={() => { setFirstRun(false); setTab("today"); }}
-            appData={{ profile, log, library, plan, prefs }}
+            appData={{ profile, log, library, plan, prefs, pantry: loadKey("pantry", {}) }}
             onRestore={(d) => {
               if (d.profile) updateProfile({ ...DEFAULT_PROFILE, ...d.profile });
               if (d.log) updateLog({ meals: d.log.meals || [], workouts: d.log.workouts || [] });
               if (d.library) updateLibrary(d.library);
               if (d.plan) updatePlan(d.plan);
               if (d.prefs) updatePrefs(d.prefs);
+              if (d.pantry) saveKey("pantry", d.pantry);
             }} />
         )}
       </main>
@@ -721,9 +744,9 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     if (!mealText.trim()) return;
     setEstimating(true); setError(""); setEstimate(null);
     try {
-      const text = await askClaude(`Estimate nutrition for this meal as eaten (typical restaurant/cafeteria portions unless stated): "${mealText}".${kitchen}${mealMemory()}\nRespond ONLY with JSON: {"name": short name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`);
+      const text = await askClaude(`Estimate nutrition for this meal as eaten (typical restaurant/cafeteria portions unless stated): "${mealText}".${kitchen}${mealMemory()}\nRespond ONLY with JSON: {"name": short name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number, "home_ingredients": [lowercase basic ingredients or grocery items this meal implies I keep at home — [] if it reads as restaurant, cafeteria, or takeout food]}. No other text.`);
       const j = parseJson(text);
-      if (j && j.calories != null) setEstimate(j);
+      if (j && j.calories != null) { setEstimate(j); learnPantry(j.home_ingredients); }
       else setError("Couldn't estimate that — try rewording it.");
     } catch (e) { setError(`Estimate failed — ${e.message}`); }
     setEstimating(false);
@@ -735,9 +758,9 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
     try {
       const b64 = await fileToJpegBase64(file);
       const note = mealText.trim();
-      const text = await askClaude(`This photo shows either a meal/food or a nutrition facts label.${note ? ` My note about this photo: "${note}" — trust this note over visual guesses wherever they conflict (portions, ingredients, what's actually mine).` : ""} If it's a meal, estimate the nutrition for the portion I'm eating as served. If it's a nutrition label, read it and report values for one typical serving (note the serving in the name).${kitchen}\nRespond ONLY with JSON: {"name": short descriptive name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}. No other text.`, 1000, 60000, { kind: "image", data: b64 });
+      const text = await askClaude(`This photo shows either a meal/food or a nutrition facts label.${note ? ` My note about this photo: "${note}" — trust this note over visual guesses wherever they conflict (portions, ingredients, what's actually mine).` : ""} If it's a meal, estimate the nutrition for the portion I'm eating as served. If it's a nutrition label, read it and report values for one typical serving (note the serving in the name).${kitchen}\nRespond ONLY with JSON: {"name": short descriptive name, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number, "home_ingredients": [lowercase basic ingredients or grocery items this implies I keep at home — [] if it reads as restaurant, cafeteria, or takeout food]}. No other text.`, 1000, 60000, { kind: "image", data: b64 });
       const j = parseJson(text);
-      if (j && j.calories != null) setEstimate(j);
+      if (j && j.calories != null) { setEstimate(j); learnPantry(j.home_ingredients); }
       else setError("Couldn't read that photo — try a clearer shot.");
     } catch (e) { setError(`Photo estimate failed — ${e.message}`); }
     setEstimating(false);
@@ -761,13 +784,15 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
       };
       if (!est.calories) throw new Error("no calorie data for this product — snap the nutrition label instead");
       setEstimate(est);
+      if (p.product_name) learnPantry([p.product_name]);
     } catch (e) { setError(`Barcode lookup failed — ${e.message}`); }
     setEstimating(false);
   };
 
   const logEstimate = (alsoSave) => {
-    updateLog({ ...log, meals: [...log.meals, { ...estimate, id: Date.now() }] });
-    if (alsoSave) updateLibrary([...library, { ...estimate, id: Date.now() + 1 }]);
+    const { home_ingredients, ...meal } = estimate;
+    updateLog({ ...log, meals: [...log.meals, { ...meal, id: Date.now() }] });
+    if (alsoSave) updateLibrary([...library, { ...meal, id: Date.now() + 1 }]);
     setEstimate(null); setMealText("");
   };
 
@@ -928,13 +953,16 @@ function SuggestTab({ profile, targets, eaten, macros, log, updateLog, library, 
       const past = loadKey("suggest-history", []);
       const avoid = past.length
         ? `\n- Unless my request names the foods itself, do NOT suggest these recently suggested items or close variants — give genuinely different options: ${past.slice(-18).join("; ")}.` : "";
+      const pantry = pantryList();
+      const pantryLine = pantry.length
+        ? `\nFoods I usually have on hand (learned from my log): ${pantry.join(", ")}. When inventing options, prefer building from these.` : "";
       const text = await askClaude(`My request: "${suggestText.trim() || "a snack"}".
 Rules — first classify my request, then answer it exactly as asked:
 (a) I named specific foods → portioning mode: every option contains ONLY those foods with exact amounts ("18 almonds + 15 peanuts", "1/4 cup each"), as three sizes or mixes (lighter / standard / fuller vs my budget). NEVER add other foods, sides, drinks, or protein sources I didn't mention.
 (b) I asked for a meal (breakfast, lunch, dinner, or similar) → three genuinely DIFFERENT real meals — different dishes, cuisines, or main ingredients, each a normal single dish a person would actually make or order (a sandwich, a bowl, a salad, a plate), sized to my budget. Don't stack extra sides or add-ons to force macros.
 (c) Otherwise (snack or open-ended) → three different simple options. Small, easy, and made from common household staples — a single item or an easy pairing (apple + peanut butter, crackers + cheese) both count; no cooking or obscure ingredients unless the request implies it.
 Except in portioning mode, the three options must be genuinely different from each other — never three sizes, styles, or variants of the same item.
-Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${avoid}
+Budget: ~${Math.max(remaining, 0)} kcal left today, and ${proteinLine}${kitchen}${pantryLine}${avoid}
 Respond ONLY with compact JSON: {"suggestions":[{"name": short name with the amount, "desc": very short how-to or note, "calories": number, "protein_g": number, "carbs_g": number, "fat_g": number}]}. No other text.`, 1200);
       const j = parseJson(text);
       if (j && j.suggestions) {
@@ -988,7 +1016,8 @@ Respond ONLY with compact JSON: {"suggestions":[{"name": short name with the amo
     if (s.recipe) return;
     setRecBusy(i); setError("");
     try {
-      const text = await askClaude(`Write a concise single-serving recipe for "${s.name}" — ${s.desc}. Land close to ${s.calories} kcal, ${s.protein_g}g protein, ${s.carbs_g}g carbs, ${s.fat_g}g fat.${kitchen}\nRespond ONLY with compact JSON: {"time_min": total number, "ingredients": [str with quantities], "steps": [max 6 short imperative steps]}. No other text.`, 1500);
+      const rp = pantryList(20);
+      const text = await askClaude(`Write a concise single-serving recipe for "${s.name}" — ${s.desc}. Land close to ${s.calories} kcal, ${s.protein_g}g protein, ${s.carbs_g}g carbs, ${s.fat_g}g fat.${kitchen}${rp.length ? `\nPrefer ingredients I usually have on hand: ${rp.join(", ")}.` : ""}\nRespond ONLY with compact JSON: {"time_min": total number, "ingredients": [str with quantities], "steps": [max 6 short imperative steps]}. No other text.`, 1500);
       const j = parseJson(text);
       if (j && j.steps) setSuggestions((cur) => cur.map((x, k) => (k === i ? { ...x, recipe: j } : x)));
       else setError("Couldn't load that recipe — tap the name again to retry.");
@@ -1627,6 +1656,7 @@ function SettingsTab({ profile, updateProfile, firstRun, done, appData, onRestor
       </Card>
       <AiCard apiKey={apiKey} updateApiKey={updateApiKey} />
       <StravaCard strava={strava} updateStrava={updateStrava} msg={stravaMsg} />
+      <PantryCard />
       <BackupCard appData={appData} onRestore={onRestore} />
       <Card>
         <div style={{ fontSize: 13, color: C.faint, lineHeight: 1.6 }}>
@@ -1723,6 +1753,45 @@ function StravaCard({ strava, updateStrava, msg }) {
         then copy its Client ID and Client Secret here and tap Connect. Do this inside the installed app
         (not a separate Safari tab). Like your AI key, these stay in this browser on this device and are
         not included in backups.
+      </div>
+    </Card>
+  );
+}
+
+function PantryCard() {
+  const [pantry, setPantry] = useState(() => loadKey("pantry", {}));
+  const [add, setAdd] = useState("");
+  const update = (n) => { setPantry(n); saveKey("pantry", n); };
+  const names = Object.entries(pantry).sort((a, b) => b[1].n - a[1].n || b[1].last - a[1].last).map(([k]) => k);
+  const addItem = () => {
+    const k = add.toLowerCase().trim().slice(0, 40);
+    if (k.length < 3) return;
+    update({ ...pantry, [k]: { n: ((pantry[k] && pantry[k].n) || 0) + 3, last: Date.now() } });
+    setAdd("");
+  };
+  return (
+    <Card>
+      <Eyebrow>Pantry (learned)</Eyebrow>
+      {names.length === 0 && <div style={{ fontSize: 13.5, color: C.faint }}>Nothing learned yet — as you log home-cooked meals and scan products, foods you keep on hand collect here.</div>}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: names.length ? 10 : 0 }}>
+        {names.map((t) => (
+          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700, padding: "4px 6px 4px 10px", borderRadius: 999, background: C.pineSoft, color: C.pine }}>
+            {t}
+            <button onClick={() => { const n = { ...pantry }; delete n[t]; update(n); }} aria-label={`Remove ${t}`}
+              style={{ border: "none", background: "none", color: C.pine, cursor: "pointer", padding: 2, display: "inline-flex" }}>
+              <Icon d={ICONS.x} size={11} sw={2.4} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input style={{ ...inputStyle, flex: 1 }} placeholder='Add one — "greek yogurt", "tortillas"…' value={add}
+          onChange={(e) => setAdd(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addItem(); }} />
+        <Btn small kind="ghost" icon="plus" onClick={addItem} disabled={add.trim().length < 3}>Add</Btn>
+      </div>
+      <div style={{ fontSize: 12, color: C.faint, marginTop: 10, lineHeight: 1.55 }}>
+        Learned automatically from meals you log and products you scan; items unseen for ~60 days fade out of use.
+        Suggestions and recipes prefer these foods. Remove anything you don't actually keep around.
       </div>
     </Card>
   );
