@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "24 — learns your pantry"; // bump when index.html changes
+const APP_BUILD = "25 — meal photos from the library too"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -882,7 +882,7 @@ function TodayTab({ profile, targets, eaten, macros, log, updateLog, library, up
               </div>
               <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, color: C.pine, opacity: estimating || !aiReady ? 0.45 : 1 }} title="Snap a meal or nutrition label">
                 <Icon d={ICONS.camera} size={20} />
-                <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={estimating || !aiReady}
+                <input type="file" accept="image/*" style={{ display: "none" }} disabled={estimating || !aiReady}
                   onChange={(e) => { estimatePhoto(e.target.files && e.target.files[0]); e.target.value = ""; }} />
               </label>
               <button onClick={() => setScanOpen(true)} disabled={estimating} title="Scan a barcode" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 50, borderRadius: 12, cursor: estimating ? "default" : "pointer", border: `1.5px solid ${C.pine}`, background: "transparent", color: C.pine, opacity: estimating ? 0.45 : 1 }}>
