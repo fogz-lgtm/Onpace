@@ -30,7 +30,7 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
-const APP_BUILD = "25 — meal photos from the library too"; // bump when index.html changes
+const APP_BUILD = "26 — break-even line on history"; // bump when index.html changes
 
 /* ============ AI config — your Anthropic API key lives in this browser's
    localStorage (You tab → AI features), never in this file or the repo ============ */
@@ -1505,7 +1505,9 @@ function HistoryTab({ profile, openDay }) {
   const chart = days.slice(0, 14).reverse();
   const logged = days.filter((d) => !d.empty);
   const devs = chart.map((d) => (d.empty ? null : d.eaten - d.calTarget));
-  const rawMax = Math.max(...devs.filter((v) => v !== null).map(Math.abs), 100);
+  // the target sits rate*500 below maintenance, so break-even is a flat line on the deviation axis
+  const deficit = Math.round((Number(profile.rateLbWk) || 0) * 500);
+  const rawMax = Math.max(...devs.filter((v) => v !== null).map(Math.abs), deficit, 100);
   const maxAbs = Math.ceil((rawMax * 1.15) / 50) * 50;
   const W = 340, H = 130;
   const mid = H / 2;
@@ -1528,6 +1530,12 @@ function HistoryTab({ profile, openDay }) {
         <Eyebrow>Last 14 days</Eyebrow>
         <svg viewBox={`0 0 ${W} ${H + 18}`} width="100%" role="img" aria-label="Calories over or under target per day, last 14 days">
           <line x1={0} x2={W} y1={mid} y2={mid} stroke={C.ink} strokeWidth={1.3} opacity={0.5} />
+          {deficit > 0 && (
+            <g>
+              <line x1={0} x2={W} y1={y(deficit)} y2={y(deficit)} stroke={C.red} strokeWidth={1.2} strokeDasharray="4 3" opacity={0.6} />
+              <text x={W - 2} y={y(deficit) - 3} textAnchor="end" fontSize="8.5" fill={C.red} fontFamily="Inter, system-ui, sans-serif">break-even +{deficit}</text>
+            </g>
+          )}
           <text x={2} y={mid - 4} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">0</text>
           <text x={2} y={12} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">+{maxAbs}</text>
           <text x={2} y={H - 3} fontSize="8.5" fill={C.faint} fontFamily="Inter, system-ui, sans-serif">−{maxAbs}</text>
@@ -1538,10 +1546,11 @@ function HistoryTab({ profile, openDay }) {
             if (d.empty) return null;
             const v = d.eaten - d.calTarget;
             const over = v > 0;
+            const overBE = v > deficit;
             return (
               <g key={d.key} onClick={() => openDay(d.key)} style={{ cursor: "pointer" }}>
-                <title>{`${dayLabel(d.key)}: ${over ? "+" : ""}${Math.round(v)} kcal vs target (${Math.round(d.eaten)} / ${d.calTarget})`}</title>
-                <circle cx={xc(i)} cy={y(v)} r={4.5} fill={over ? C.amberDeep : C.pine} stroke="#FFF" strokeWidth={1.5} />
+                <title>{`${dayLabel(d.key)}: ${over ? "+" : ""}${Math.round(v)} kcal vs target (${Math.round(d.eaten)} / ${d.calTarget})${overBE ? " · above break-even" : ""}`}</title>
+                <circle cx={xc(i)} cy={y(v)} r={4.5} fill={overBE ? C.red : over ? C.amberDeep : C.pine} stroke="#FFF" strokeWidth={1.5} />
               </g>
             );
           })}
@@ -1555,8 +1564,9 @@ function HistoryTab({ profile, openDay }) {
           })}
         </svg>
         <div style={{ fontSize: 11.5, color: C.faint, marginTop: 6, lineHeight: 1.5 }}>
-          Calories vs. that day's target — dots above the 0 line are <span style={{ color: C.amberDeep, fontWeight: 700 }}>over</span>,
-          below are under. Tap a dot, or a day below, to view or edit it.
+          Calories vs. that day's target — dots above the 0 line are <span style={{ color: C.amberDeep, fontWeight: 700 }}>over target</span> but
+          still in deficit; <span style={{ color: C.red, fontWeight: 700 }}>red</span> dots above the dashed break-even line mean a true surplus.
+          Tap a dot, or a day below, to view or edit it.
         </div>
       </Card>
 
@@ -1571,10 +1581,10 @@ function HistoryTab({ profile, openDay }) {
               <div style={{ fontSize: 12, color: C.faint, marginTop: 2 }}>
                 P {Math.round(d.protein)}/{d.proteinTarget}
                 {d.wc > 0 ? ` · +${Math.round(d.wc)} training` : ""}
-                {d.eaten > d.calTarget ? " · over target" : ""}
+                {d.eaten > d.calTarget + deficit ? " · over break-even" : d.eaten > d.calTarget ? " · over target" : ""}
               </div>
             </div>
-            <span style={{ fontFamily: F.mono, fontSize: 13.5, fontWeight: 600, color: d.eaten > d.calTarget ? C.amberDeep : C.pine }}>
+            <span style={{ fontFamily: F.mono, fontSize: 13.5, fontWeight: 600, color: d.eaten > d.calTarget + deficit ? C.red : d.eaten > d.calTarget ? C.amberDeep : C.pine }}>
               {Math.round(d.eaten)} / {d.calTarget}
             </span>
             <span style={{ color: C.faint, display: "inline-flex", transform: "rotate(-90deg)" }}><Icon d={ICONS.chevron} size={15} /></span>
